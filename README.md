@@ -100,9 +100,39 @@ node test/store.test.mjs
 node test/search.test.mjs
 node test/settings.test.mjs
 node test/diary.test.mjs
+node test/toolkit.test.mjs
 ```
 
 逐个文件跑：`node --test test/` 在本机沙箱里会因为 `spawn EPERM` 挂掉。
+
+### 不能 import `@deepseek-ai/*`
+
+bundle 是用 pnpm 的 `link:` 装进 profile 的，运行时从本仓库目录向上解析依赖。而 `@deepseek-ai/*` 这些包**只存在于 `app.asar` 内**，profile 的 `node_modules\@deepseek-ai\` 下只有 `cosmokit` 和 `schemastery`。所以：
+
+```js
+import { defineTool } from '@deepseek-ai/dsh-tools'  // ✗ ERR_MODULE_NOT_FOUND，整个 bundle 起不来
+```
+
+注意这是 **import 的问题，不是 link 安装的问题** —— link 安装本身完全正常，只要不 import DSH 内部包就行。真正的判据是「有没有 import」，`tool-fence.js` 和伴侣 preset 里一条 `import` 都没有，所以它们走 link 一点事没有。
+
+需要 `defineTool` 这类工具函数时，在本仓库内自己实现一份（见 `lib/toolkit.js`），或者干脆只跟 `ctx` 服务打交道 —— 根平面注册的包也全都只走 `ctx`。
+
+### 面板接口要走 `connection.fetch.register`
+
+`/api` 这个前缀被 `client-connection` 独占，`ctx.webServer.register({ kind: 'prefix', path: '/api/deepmemory' })` 拿不到浏览器请求（浏览器的 fetch 只带 authority-bound 签名 cookie，走的是 Connection 的 Fetch 通道）。正确写法：
+
+```js
+ctx.inject(['connection'], (connCtx) => {
+  connCtx.effect(() => connCtx.connection.fetch.register({
+    path: '/api/deepmemory/stats',
+    methods: ['GET', 'HEAD'],
+    requestBody: 'buffered',
+    fetch: async (request) => new Response('…'),
+  }))
+})
+```
+
+要点：`fetch` 收到的是 WHATWG `Request`、必须返回 `Response`；同一 `path` 只能注册一次（所以 GET 与 POST 要拆两条）；声明 GET 时把 `HEAD` 一起写上，否则 HEAD 掉 404。
 
 环境事实（写代码时别踩）：
 
