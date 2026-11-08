@@ -66,6 +66,26 @@
 
 五个页签：概览（计数与重建索引）、事实、片段、日记、设置（三层开关 + 每日日记任务 + 语义检索依赖）。
 
+## 配色与主题
+
+面板和会话头的小开关都只引用 `--dsw-alias-*` token，不写死任何颜色，所以亮色和暗色都跟着走，不需要媒体查询。
+
+**为什么不用 `prefers-color-scheme`**：主题包把亮色变量声明在 `body` 上，暗色声明在 `body[data-ds-dark-theme]` 上，主题是用户在设置里选的，跟系统无关。用媒体查询反而会和用户的选择打架。
+
+三组容易混淆的 token：
+
+| token | 含义 | 不能怎么用 |
+| --- | --- | --- |
+| `brand-primary` | **单色**（亮色近黑 `#0f1115`，暗色近白）。是对比填充色 | 不能当蓝色 accent 用 |
+| `button-primary-fill` + `label-primary-foreground` | 必须成对：前者填底，后者写字，配色翻转后对比度不变 | 不能只用一个 |
+| `link` | 真正的蓝色，两套背景都清晰 | —— |
+
+其余用到的：`label-primary` / `label-secondary` / `label-tertiary` 三级文字，`border-l1`（发丝线）/ `border-l2`（常规边框），`bg-base`（页面）/ `bg-layer-1`（输入框）/ `bg-layer-2`（次级面），`settings-card-fill` + `settings-card-stroke`（卡片面 + 描边，宿主就是用这一对画设置卡片的），`interactive-bg-hover`（悬停），`state-error-primary`（错误）。圆角用 `--dsw-radius-xs/sm/md`。
+
+**样式是注入的 `<style>`，不是内联 `style`**。原因很实际：`hover`、`:focus`、过渡、滚动条样式都无法内联表达。注入时带 `data-plugin-css` 标记，插件重载（HMR）时不会堆叠重复样式表。类名统一 `dm-` 前缀。
+
+侧边栏图标用 `stroke: currentColor`，颜色交给宿主按钮决定——同一份 SVG 在亮/暗侧边栏、选中/未选中四种状态都正确。
+
 ## 会话标题栏的三个小开关
 
 `conversation.session.header.actions` 里注册了一个 `deepmemory-flags`，紧挨着会话标题：
@@ -75,6 +95,8 @@
 ```
 
 单字胶囊，**实心 = 开，空心 = 关**，悬停有完整说明。点一下只改**当前会话**这一层（`scope: 'session'`），preset 默认与全局默认都不动。
+
+实心态用的是 `button-primary-fill` + `label-primary-foreground` 这一对，所以亮色下是深底浅字、暗色下自动反过来，不会出现白字配白底。
 
 之所以做成单字：这个槽位「overflow is clipped and faded before the utilities」，长标签会被裁掉；`label` 属性对 list 项是显示文字，但会话头里没有足够宽度承载三个中文词。
 
