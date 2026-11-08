@@ -9,3 +9,4 @@ test/_*
 # asar extracts of Harness internals, regenerated on demand (see reference/README.md)
 reference/*
 !reference/README.md
+local/

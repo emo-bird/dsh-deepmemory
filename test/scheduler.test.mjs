@@ -76,6 +76,7 @@ test('the delivered prompt names the day and forbids rewriting an existing page'
   assert.match(prompt, /2026-11-07/)
   assert.match(prompt, /diary_read/)
   assert.match(prompt, /不要重写|跳过/)
+  assert.match(prompt, /diary_material/)
   assert.match(prompt, /diary_write/)
   // The no-material escape hatch has to be explicit, or the agent invents a day.
   assert.match(prompt, /今天没有素材/)
