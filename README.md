@@ -64,7 +64,32 @@
 
 `sidebar.panellist` 的 id 与 `main` 的 key 都是 `deepmemory`——侧边栏只认 id 去解析主面板。
 
-五个页签：概览（计数与重建索引）、事实、片段、日记、设置（三层开关 + 语义检索）。
+五个页签：概览（计数与重建索引）、事实、片段、日记、设置（三层开关 + 每日日记任务 + 语义检索依赖）。
+
+## 会话标题栏的三个小开关
+
+`conversation.session.header.actions` 里注册了一个 `deepmemory-flags`，紧挨着会话标题：
+
+```
+读  写  日
+```
+
+单字胶囊，**实心 = 开，空心 = 关**，悬停有完整说明。点一下只改**当前会话**这一层（`scope: 'session'`），preset 默认与全局默认都不动。
+
+之所以做成单字：这个槽位「overflow is clipped and faded before the utilities」，长标签会被裁掉；`label` 属性对 list 项是显示文字，但会话头里没有足够宽度承载三个中文词。
+
+会话头组件通过 `sessionId` prop 拿到当前会话 id，所以只注册一次就能服务所有对话。
+
+## 日记定时任务
+
+面板「设置」页可以开启，落到 DSH 的 `schedule` 服务（`kind: 'daily'`），默认 `23:40` / `Asia/Shanghai`，`target` 是 `{ kind: 'new', create: { cwd, agentPreset } }`——每次投递开一个新会话，不会写进聊天里。
+
+- 任务的唯一身份是标题 `深度记忆 · 写日记`；`ensureTask` 按标题查目录，已存在且时间相同就直接返回，时间不同则 `edit` 改期，不会造出第二个任务
+- 日期按投递时间算：小时 < 4 视为「补昨晚」，否则就是当天（`targetDayFor`）
+- 当天没素材时不写：prompt 里明确要求回「今天没有素材，不写日记」且不调 `diary_write`
+- 插件自身不发任何模型调用，也不轮询——一切由 DSH 的定时系统驱动
+
+## 面板接口
 
 面板不走 typert Remote（纯 JS 手写包没有 generator 描述符），走 Connection 服务的精确 Fetch 路由：
 
@@ -75,10 +100,16 @@ GET  /api/deepmemory/episodes?limit=100&day=YYYY-MM-DD
 GET  /api/deepmemory/diary
 GET  /api/deepmemory/search?q=…
 GET  /api/deepmemory/settings
-POST /api/deepmemory/settings   { scope: global|preset|session|semantic|clear-session, id, flags, presetId }
-POST /api/deepmemory/facts      { text, subject, weight }
-POST /api/deepmemory/forget     { kind: fact|episode|diary, id | day }
+GET  /api/deepmemory/session-flags?sessionId=…
+GET  /api/deepmemory/dependency
+GET  /api/deepmemory/diary-task
+POST /api/deepmemory/settings       { scope: global|preset|session|semantic|clear-session, id, flags, presetId }
+POST /api/deepmemory/session-flags  { sessionId, flags | clear: true }
+POST /api/deepmemory/facts          { text, subject, weight }
+POST /api/deepmemory/forget         { kind: fact|episode|diary, id | day }
 POST /api/deepmemory/rebuild
+POST /api/deepmemory/dependency     { action: 'install' }
+POST /api/deepmemory/diary-task     { action: 'enable', time?, zone?, cwd?, agentPreset? } | { action: 'disable' }
 ```
 
 **必须注册到 `connection.fetch.register`，不是 `webServer.register`。** `/api` 这个 prefix 由 `client-connection` 独占，只有它会在把请求交给 handler 之前做浏览器信任校验并把 Peer 传进来；直接在 webserver 上挂一条 prefix 会在那道栅栏之前应答。重复注册同一 path 会抛错，所以同一路径的 `GET` 与 `POST` 分成两条路由；`GET` 要和 `HEAD` 一起声明，否则 HEAD 会掉到 404。
@@ -93,6 +124,15 @@ POST /api/deepmemory/rebuild
 
 > 长期记忆：N 条事实、M 条过往片段、K 篇日记。最近一篇日记是 YYYY-MM-DD。需要细节时用 memory_search 查。
 
+### 第三档依赖不进 profile
+
+`@huggingface/transformers` 会拉 `onnxruntime-node`（unpacked ~290 MB）。装进 profile 会让每次 DSH 启动都慢，而且装失败会把 profile 弄成半坏状态。所以：
+
+- 装进本 bundle 自己的 `vendor/`（已在 `.gitignore` 里）
+- 面板「设置 → 语义检索」有安装按钮，`POST /api/deepmemory/dependency {action:'install'}` 走 `npm install`，进程内串行化（两次点击不会起两个 npm）
+- 无头环境用 `node scripts/install-embed.mjs`
+- 依赖缺失时 `createEmbedder()` 返回 `undefined`，**不抛错**，第三档保持关闭；开关仍然可以拨，只是不生效
+
 ## 开发
 
 ```bash
@@ -101,6 +141,7 @@ node test/search.test.mjs
 node test/settings.test.mjs
 node test/diary.test.mjs
 node test/toolkit.test.mjs
+node test/scheduler.test.mjs
 ```
 
 逐个文件跑：`node --test test/` 在本机沙箱里会因为 `spawn EPERM` 挂掉。
