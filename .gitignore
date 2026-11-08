@@ -2,3 +2,6 @@ node_modules/
 vendor/
 *.log
 .DS_Store
+
+# one-off probes, not part of the suite
+test/_*
