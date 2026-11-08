@@ -66,7 +66,7 @@
 
 五个页签：概览（计数与重建索引）、事实、片段、日记、设置（三层开关 + 语义检索）。
 
-面板不走 typert Remote（纯 JS 手写包没有 generator 描述符），走自建的 `/api/deepmemory/*` HTTP 路由：
+面板不走 typert Remote（纯 JS 手写包没有 generator 描述符），走 Connection 服务的精确 Fetch 路由：
 
 ```
 GET  /api/deepmemory/stats
@@ -80,6 +80,8 @@ POST /api/deepmemory/facts      { text, subject, weight }
 POST /api/deepmemory/forget     { kind: fact|episode|diary, id | day }
 POST /api/deepmemory/rebuild
 ```
+
+**必须注册到 `connection.fetch.register`，不是 `webServer.register`。** `/api` 这个 prefix 由 `client-connection` 独占，只有它会在把请求交给 handler 之前做浏览器信任校验并把 Peer 传进来；直接在 webserver 上挂一条 prefix 会在那道栅栏之前应答。重复注册同一 path 会抛错，所以同一路径的 `GET` 与 `POST` 分成两条路由；`GET` 要和 `HEAD` 一起声明，否则 HEAD 会掉到 404。
 
 浏览器端 `fetch` 同源、带 authority-bound cookie，所以不需要额外鉴权。
 
