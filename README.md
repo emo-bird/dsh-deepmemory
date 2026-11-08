@@ -109,7 +109,7 @@
 | `icon.svg`（包根目录） | bundle 元数据图标，插件列表/能力面板用 | 36×36 鲸鱼剪影，DeepSeek 蓝渐变，白色眼睛 + 三个白点 |
 | `lib/client.js` 里的 `SidebarIcon` | 侧边栏按钮 | 同一个鲸鱼的 24 网格版，单色 `currentColor` 实心，三个点用 `fill-rule="evenodd"` 打穿 |
 
-图形取意自 DeepSeek 的鲸鱼标志：一条鲸，身上打三个孔当「记忆点」。两处用同一份坐标——`tools/icon-shape.py` 是唯一的源，改形状后跑 `node tools/icon-emit.mjs` 生成 `tools/icon-paths.json`，再把两个 path 贴进 `icon.svg` 与 `lib/client.js`。
+图形取意自 DeepSeek 的鲸鱼标志：一条鲸，身上打三个孔当「记忆点」。两处用同一份坐标——`tools/icon-shape.py` 是唯一的源，改形状后跑 `node tools/icon-emit.mjs` 生成 `tools/icon-paths.json`，再把两个 path 贴进 `icon.svg` 与 `lib/client.js`。定型效果见 `docs/icon-preview.png`（上排深色、下排浅色，依次 64/40/28/20px）。
 
 侧边栏那份和包图标有两点刻意的差别：**没有眼睛**（18px 下眼点会变成一颗杂点），**点更大**（0.77 单位 ≈ 0.9px，否则细到看不见）。之前两处用的还是完全不相干的图形（一个是回环、一个是头/脑轮廓），已经统一——同一个插件在两处露脸，认得出是同一个东西才算合格。
 
