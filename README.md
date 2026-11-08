@@ -166,7 +166,7 @@ POST /api/deepmemory/dependency     { action: 'install' }
 POST /api/deepmemory/diary-task     { action: 'enable', time?, zone?, cwd?, agentPreset? } | { action: 'disable' }
 ```
 
-`GET /dependency` 的响应里带一个 `progress`：`{ phase: 'idle'|'installing'|'done'|'error', bytes, totalBytes, startedAt, finishedAt, error }`。npm 不报字节，所以 Host 在装的时候每秒量一次 `vendor/` 的大小当作进度，`totalBytes` 是估算的 320 MB（onnxruntime-node 解包约 293 MB 加上其余依赖）。面板每 900 ms 拉一次这个接口，把「安装中…」变成「12.4 MB / 320.0 MB（4%）」。这是一个进度提示，不是倒计时；装完显示的是实测落盘大小。
+`GET /dependency` 的响应里带一个 `progress`：`{ phase: 'idle'|'installing'|'done'|'error', bytes, totalBytes, startedAt, finishedAt, error }`。npm 不报字节，所以 Host 在装的时候每秒量一次 `vendor/` 的大小当作进度，`totalBytes` 是估算的 600 MB（实测一次完整安装约 575 MB——onnxruntime-node 把每个平台的 native 运行时都装了）。面板每 900 ms 拉一次这个接口，把「安装中…」变成「12.4 MB / 320.0 MB（4%）」。这是一个进度提示，不是倒计时；装完显示的是实测落盘大小。
 
 **必须注册到 `connection.fetch.register`，不是 `webServer.register`。** `/api` 这个 prefix 由 `client-connection` 独占，只有它会在把请求交给 handler 之前做浏览器信任校验并把 Peer 传进来；直接在 webserver 上挂一条 prefix 会在那道栅栏之前应答。重复注册同一 path 会抛错，所以同一路径的 `GET` 与 `POST` 分成两条路由；`GET` 要和 `HEAD` 一起声明，否则 HEAD 会掉到 404。
 
@@ -182,12 +182,19 @@ POST /api/deepmemory/diary-task     { action: 'enable', time?, zone?, cwd?, agen
 
 ### 第三档依赖不进 profile
 
-`@huggingface/transformers` 会拉 `onnxruntime-node`（unpacked ~290 MB）。装进 profile 会让每次 DSH 启动都慢，而且装失败会把 profile 弄成半坏状态。所以：
+`@huggingface/transformers` 会拉 `onnxruntime-node`（unpacked 约 575 MB，含各平台 native 库）。装进 profile 会让每次 DSH 启动都慢，而且装失败会把 profile 弄成半坏状态。所以：
 
-- 装进本 bundle 自己的 `vendor/`（已在 `.gitignore` 里）
+- 装进本 bundle 自己的 `vendor/`（已在 `.gitignore` 里），npm 缓存也放 `vendor/.npm-cache`——默认缓存在系统临时目录，受限环境下会写不进去，装到一半失败比慢更糟
 - 面板「设置 → 语义检索」有安装按钮，`POST /api/deepmemory/dependency {action:'install'}` 走 `npm install`，进程内串行化（两次点击不会起两个 npm）
 - 无头环境用 `node scripts/install-embed.mjs`
 - 依赖缺失时 `createEmbedder()` 返回 `undefined`，**不抛错**，第三档保持关闭；开关仍然可以拨，只是不生效
+
+**模型是另一回事。** 依赖装好只代表代码能跑；模型要单独下载，默认从 `huggingface.co` 拉 `Xenova/bge-small-zh-v1.5`（`BAAI/*` 的原始仓库只有 PyTorch 权重，没有 `onnx/`，直接指过去会 404）。国内常连不上，此时：
+
+- 在面板同页把「下载镜像」填 `https://hf-mirror.com`（写进 `semantic.remoteHost`，也可用环境变量 `DSH_DEEPMEMORY_HF_HOST`）
+- 或者自己把 ONNX 目录放进 `vendor/models`，再把「本地模型目录」指到它（写进 `semantic.modelPath`）
+
+两条都失败时第三档就保持关闭，日志里会说明原因。注意本机实测：镜像能取 `config.json`/`tokenizer.json`，但 `.onnx` 走的是另一个 CDN，Node 的 TLS 校验在这台机器上过不去（`UNABLE_TO_VERIFY_LEAF_SIGNATURE`），所以模型要手工放。
 
 ## 开发
 
