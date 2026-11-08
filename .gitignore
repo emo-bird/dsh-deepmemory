@@ -5,3 +5,7 @@ vendor/
 
 # one-off probes, not part of the suite
 test/_*
+
+# asar extracts of Harness internals, regenerated on demand (see reference/README.md)
+reference/*
+!reference/README.md
