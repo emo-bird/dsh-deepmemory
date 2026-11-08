@@ -2,7 +2,7 @@
 
 深度记忆插件：跨会话的长期记忆 + 侧边栏控制台。
 
-一个本地 SQLite 文件存四类东西——**事实**（facts，长期有效的一句话）、**片段**（episodes，用户说过的话）、**日记**（diary，一天一篇）、**向量**（vec，可选的嵌入索引）。会话日志才是真源，这个库是可以在任何时候重建的缓存。
+一个本地 SQLite 文件存四类东西——**事实**（facts，长期有效的一句话）、**片段**（episodes，双方说过的话——用户说的话和助手回的话都记）、**日记**（diary，一天一篇）、**向量**（vec，可选的嵌入索引）。会话日志才是真源，这个库是可以在任何时候重建的缓存。
 
 - 包名：`@emo-bird/dsh-deepmemory`
 - 插件 id：`deepmemory`
@@ -40,6 +40,8 @@
 
 存储时只写「与父层不同」的键，所以「跟随上层」是默认状态，文件不会膨胀；把值改回与父层相同，那个键会被删掉。
 
+`preset` 那一层是**新会话的默认值**：用该 preset 开出来的会话，没被单独覆盖过就按它走。改 preset 层不会影响已存在的会话。
+
 ## 四个工具
 
 模型可见的：
@@ -64,7 +66,11 @@
 
 `sidebar.panellist` 的 id 与 `main` 的 key 都是 `deepmemory`——侧边栏只认 id 去解析主面板。
 
-五个页签：概览（计数与重建索引）、事实、片段、日记、设置（三层开关 + 每日日记任务 + 语义检索依赖）。
+六个页签：概览（计数与重建索引）、事实、片段、日记、**会话**、设置。
+
+「会话」页是逐会话控制台：上面一屏是每个 preset 的默认值（新会话继承它），下面一屏是全部已存储会话——从这里挑一条开开关，比记住 session id 现实。列表来自 `sessionPersistence.list()`，标题走 `sessionProjectionCache.cachedSnapshot`（零 I/O），子代理会话被排除。
+
+「设置」页只有全局默认、每日日记任务、语义检索依赖。
 
 ## 配色与主题
 
@@ -122,6 +128,7 @@ GET  /api/deepmemory/episodes?limit=100&day=YYYY-MM-DD
 GET  /api/deepmemory/diary
 GET  /api/deepmemory/search?q=…
 GET  /api/deepmemory/settings
+GET  /api/deepmemory/sessions
 GET  /api/deepmemory/session-flags?sessionId=…
 GET  /api/deepmemory/dependency
 GET  /api/deepmemory/diary-task
