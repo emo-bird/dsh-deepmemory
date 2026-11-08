@@ -1,0 +1,118 @@
+# dsh-deepmemory
+
+深度记忆插件：跨会话的长期记忆 + 侧边栏控制台。
+
+一个本地 SQLite 文件存四类东西——**事实**（facts，长期有效的一句话）、**片段**（episodes，用户说过的话）、**日记**（diary，一天一篇）、**向量**（vec，可选的嵌入索引）。会话日志才是真源，这个库是可以在任何时候重建的缓存。
+
+- 包名：`@emo-bird/dsh-deepmemory`
+- 插件 id：`deepmemory`
+- 数据目录：`${DSH_HOME:-~/.dsh}/deepmemory/`（`memory.db` + `settings.json`）
+
+## 它解决什么
+
+普通会话的记忆只在上下文窗口里。这个插件把「换一个会话还用得上」的东西存下来，并且在下一轮对话里用一句极短的话告诉模型「你有记忆，去哪查」，内容本身要模型**主动调工具**取。
+
+不每轮注入全文是刻意的：注入成本是常数，查询词由模型按当前对话决定，比固定注入更准。
+
+## 三档检索
+
+同一次搜索的三个阶段，不是三选一：
+
+| 档 | 做法 | 成本 | 作用 |
+|---|---|---|---|
+| 1 | FTS5 `tokenize=trigram` + BM25 | ~1ms | 中文子串召回，保证不漏 |
+| 2 | 中文 bigram 余弦重排 | ~5ms | 换了说法的也能往前提 |
+| 3 | 嵌入向量余弦重排 | 取决于模型 | 语义相近但用词不同的 |
+
+档 1+2 永远开，零依赖。档 3 默认关闭，面板里开启后需要模型；运行失败自动降级到档 2，不会让搜索整体失败。
+
+**换嵌入模型**：`vec` 表只是派生索引，删掉重算即可；原文不受影响。
+
+## 写入与注入的门控
+
+三层，越具体越优先：
+
+```
+会话覆盖  >  preset 默认  >  全局默认
+```
+
+每层三个开关：**读记忆** / **写记忆** / **计入日记**。
+
+存储时只写「与父层不同」的键，所以「跟随上层」是默认状态，文件不会膨胀；把值改回与父层相同，那个键会被删掉。
+
+## 四个工具
+
+模型可见的：
+
+- `memory_search` — 关键词检索事实/片段/日记
+- `memory_recall` — 概览：重要事实 + 最近一篇日记
+- `memory_save` — 存一条事实
+- `diary_read` — 读日记（不给日期就读最新一篇）
+
+另有 `diary_write` 只给定时任务用：模型在普通会话里不该自己写日记。
+
+## 日记
+
+**一天一篇，跨会话整合**：把当天所有项目、所有 preset、飞书与 Web 的片段汇总成一篇散文，不是按会话列条目。当天没有对话就不写。
+
+由 DSH 定时任务在固定时间开一个新会话，把素材喂进去，模型写完后调 `diary_write` 落盘。插件本身不含任何模型调用。
+
+- `lib/diary.js` 的 `composePrompt(store, day)` 生成「指令 + 素材」
+- `renderDigest` 按会话分组、按时间排序，单条截断 400 字，最多 400 条
+
+## 侧边栏面板
+
+`sidebar.panellist` 的 id 与 `main` 的 key 都是 `deepmemory`——侧边栏只认 id 去解析主面板。
+
+五个页签：概览（计数与重建索引）、事实、片段、日记、设置（三层开关 + 语义检索）。
+
+面板不走 typert Remote（纯 JS 手写包没有 generator 描述符），走自建的 `/api/deepmemory/*` HTTP 路由：
+
+```
+GET  /api/deepmemory/stats
+GET  /api/deepmemory/facts?limit=200
+GET  /api/deepmemory/episodes?limit=100&day=YYYY-MM-DD
+GET  /api/deepmemory/diary
+GET  /api/deepmemory/search?q=…
+GET  /api/deepmemory/settings
+POST /api/deepmemory/settings   { scope: global|preset|session|semantic|clear-session, id, flags, presetId }
+POST /api/deepmemory/facts      { text, subject, weight }
+POST /api/deepmemory/forget     { kind: fact|episode|diary, id | day }
+POST /api/deepmemory/rebuild
+```
+
+浏览器端 `fetch` 同源、带 authority-bound cookie，所以不需要额外鉴权。
+
+## 提示词
+
+「什么时候查、什么时候记」由插件自己写（`lib/index.js` 的 `guidanceText()`），注册在 `systemPrompt.section` 上，不塞进任何 preset 的 persona——换 preset 不该换掉记忆的用法。
+
+另外注册一个 `systemPrompt.context`（order 900），每步只说一句：
+
+> 长期记忆：N 条事实、M 条过往片段、K 篇日记。最近一篇日记是 YYYY-MM-DD。需要细节时用 memory_search 查。
+
+## 开发
+
+```bash
+node test/store.test.mjs
+node test/search.test.mjs
+node test/settings.test.mjs
+node test/diary.test.mjs
+```
+
+逐个文件跑：`node --test test/` 在本机沙箱里会因为 `spawn EPERM` 挂掉。
+
+环境事实（写代码时别踩）：
+
+- 本机 node 只有 `C:\Program Files\DSH NEXT\resources\runtime\x64\primary-runtime\dependencies\node\bin\node.exe`（v24.21.0，SQLite 3.53.4，`node:sqlite` 内置）
+- FTS5 `trigram` 对**少于 3 个字符**的查询必然为空，短查询要退回 `LIKE`
+- FTS 表必须是普通 `fts5(text, tokenize='trigram')`，写成 `content=''` 的 contentless 表不能 `DELETE`
+- `{{...}}` 在 prompt section 里会被当模板变量，未注册的变量会让整轮请求失败
+
+## 安装
+
+```text
+plugin_manager action=install_bundle target=<本目录绝对路径>
+```
+
+替换已安装的包需要重启 DSH 才会加载新 JS。
