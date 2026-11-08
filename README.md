@@ -73,14 +73,18 @@
 
 六个页签：概览（计数与重建索引）、事实、片段、日记、**会话**、设置。
 
+面板右上角有一个搜索框，回车就跑一次检索（和工具走同一条 `MemorySearch` 流水线，所以面板能搜到的和 agent 能搜到的是同一批），结果按事实 / 片段 / 日记打标签，可以直接删。
+
 「会话」页是逐会话控制台，两张表：
 
-- **新会话的默认值（按 preset）**：一行一个 preset，勾的是该 preset 新开会话时的起点。
+- **新会话的默认值（按 preset）**：一行一个 preset（显示名 + id，来自 `agentPresets.list()`），勾的是该 preset 新开会话时的起点。
 - **会话**：一行一个已存储会话，四列开关 + 前两列信息。
 
-表头固定为「会话 / 首句 / 读 写 日 删」。**首句**是该会话里用户说的第一句话（`episodes` 里按 `created_at` 取每条会话最早的一条 user 记录）——自动生成的标题会漂，首句不会，认人靠它更可靠。会话清单来自 `sessionPersistence.list()`，标题走 `sessionProjectionCache.cachedSnapshot`（零 I/O），子代理会话被排除。某行被单独改过时名字下方会出现「已覆盖 · 恢复继承」。
+表头固定为「会话 / 首句 / 读 写 日 删」。**首句**优先取 `episodes` 里该会话最早的一条 user 记录（`ROW_NUMBER()` 取，不用 `MIN(created_at)` 自连接——同一毫秒的两条会因此挑错）；没有记录的旧会话回退到 `sessionProjectionCache` 的 `titleInput.first.text`，那是宿主用来生成标题的原始提问，所以老会话也有首句。会话清单来自 `sessionPersistence.list()`，标题走 `sessionProjectionCache.cachedSnapshot`（零 I/O），子代理会话被排除。某行被单独改过时名字下方会出现「已覆盖 · 恢复继承」，开了「删」的会话还会多一条红色「清空本会话记忆」。
 
 「设置」页只有全局默认、每日日记任务、语义检索依赖。
+
+删除有三个入口，都不需要开会话的「删」开关：事实页、片段页、日记页各自的「删除」按钮，以及搜索结果的删除。只有「清空某个会话的全部片段」受「删」开关约束——那是唯一影响一片历史的动作。日记与片段删除前会弹一次确认。
 
 ## 配色与主题
 
@@ -161,6 +165,8 @@ POST /api/deepmemory/rebuild
 POST /api/deepmemory/dependency     { action: 'install' }
 POST /api/deepmemory/diary-task     { action: 'enable', time?, zone?, cwd?, agentPreset? } | { action: 'disable' }
 ```
+
+`GET /dependency` 的响应里带一个 `progress`：`{ phase: 'idle'|'installing'|'done'|'error', bytes, totalBytes, startedAt, finishedAt, error }`。npm 不报字节，所以 Host 在装的时候每秒量一次 `vendor/` 的大小当作进度，`totalBytes` 是估算的 320 MB（onnxruntime-node 解包约 293 MB 加上其余依赖）。面板每 900 ms 拉一次这个接口，把「安装中…」变成「12.4 MB / 320.0 MB（4%）」。这是一个进度提示，不是倒计时；装完显示的是实测落盘大小。
 
 **必须注册到 `connection.fetch.register`，不是 `webServer.register`。** `/api` 这个 prefix 由 `client-connection` 独占，只有它会在把请求交给 handler 之前做浏览器信任校验并把 Peer 传进来；直接在 webserver 上挂一条 prefix 会在那道栅栏之前应答。重复注册同一 path 会抛错，所以同一路径的 `GET` 与 `POST` 分成两条路由；`GET` 要和 `HEAD` 一起声明，否则 HEAD 会掉到 404。
 
