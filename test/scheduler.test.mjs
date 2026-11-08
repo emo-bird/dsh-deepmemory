@@ -155,12 +155,31 @@ test('installState treats a missing vendor directory as not installed', () => {
 test('installState finds a vendored dependency and downloaded models', () => {
   const root = mkdtempSync(join(tmpdir(), 'deepmemory-embed-'))
   const packageDir = join(root, 'vendor', 'node_modules', '@huggingface', 'transformers')
-  mkdirSync(packageDir, { recursive: true })
-  writeFileSync(join(packageDir, 'package.json'), '{"name":"@huggingface/transformers"}\n', 'utf8')
+  mkdirSync(join(packageDir, 'dist'), { recursive: true })
+  writeFileSync(
+    join(packageDir, 'package.json'),
+    '{"name":"@huggingface/transformers","exports":{"node":{"import":{"default":"./dist/transformers.node.mjs"}}}}\n',
+    'utf8',
+  )
+  writeFileSync(join(packageDir, 'dist', 'transformers.node.mjs'), 'export const pipeline = () => {}\n', 'utf8')
   const models = join(root, 'vendor', 'models')
   mkdirSync(models, { recursive: true })
   writeFileSync(join(models, 'model.onnx'), 'x', 'utf8')
   const state = installState(root)
   assert.equal(state.installed, true)
   assert.deepEqual(state.models, ['model.onnx'])
+})
+
+test('installState does not count a package whose entry file is missing', () => {
+  // An interrupted npm run leaves the manifest but not the file it points at;
+  // treating that as installed would advertise tier 3 and then fail every query.
+  const root = mkdtempSync(join(tmpdir(), 'deepmemory-embed-'))
+  const packageDir = join(root, 'vendor', 'node_modules', '@huggingface', 'transformers')
+  mkdirSync(packageDir, { recursive: true })
+  writeFileSync(
+    join(packageDir, 'package.json'),
+    '{"name":"@huggingface/transformers","exports":{"node":{"import":{"default":"./dist/transformers.node.mjs"}}}}\n',
+    'utf8',
+  )
+  assert.equal(installState(root).installed, false)
 })
