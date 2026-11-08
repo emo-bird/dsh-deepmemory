@@ -36,7 +36,9 @@
 会话覆盖  >  preset 默认  >  全局默认
 ```
 
-每层三个开关：**读记忆** / **写记忆** / **计入日记**。
+每层四个开关：**读记忆** / **写记忆** / **计入日记** / **删除记忆**。
+
+「删除记忆」是唯一不可撤销的一维，**全局默认关闭**：打开之后，面板才会允许「清空本会话记忆」——它删的是这个会话的原始片段，事实（facts）不动，因为事实已经脱离会话独立存在。
 
 存储时只写「与父层不同」的键，所以「跟随上层」是默认状态，文件不会膨胀；把值改回与父层相同，那个键会被删掉。
 
@@ -68,7 +70,12 @@
 
 六个页签：概览（计数与重建索引）、事实、片段、日记、**会话**、设置。
 
-「会话」页是逐会话控制台：上面一屏是每个 preset 的默认值（新会话继承它），下面一屏是全部已存储会话——从这里挑一条开开关，比记住 session id 现实。列表来自 `sessionPersistence.list()`，标题走 `sessionProjectionCache.cachedSnapshot`（零 I/O），子代理会话被排除。
+「会话」页是逐会话控制台，两张表：
+
+- **新会话的默认值（按 preset）**：一行一个 preset，勾的是该 preset 新开会话时的起点。
+- **会话**：一行一个已存储会话，四列开关 + 前两列信息。
+
+表头固定为「会话 / 首句 / 读 写 日 删」。**首句**是该会话里用户说的第一句话（`episodes` 里按 `created_at` 取每条会话最早的一条 user 记录）——自动生成的标题会漂，首句不会，认人靠它更可靠。会话清单来自 `sessionPersistence.list()`，标题走 `sessionProjectionCache.cachedSnapshot`（零 I/O），子代理会话被排除。某行被单独改过时名字下方会出现「已覆盖 · 恢复继承」。
 
 「设置」页只有全局默认、每日日记任务、语义检索依赖。
 
@@ -92,19 +99,19 @@
 
 侧边栏图标用 `stroke: currentColor`，颜色交给宿主按钮决定——同一份 SVG 在亮/暗侧边栏、选中/未选中四种状态都正确。
 
-## 会话标题栏的三个小开关
+## 会话标题栏的四个小开关
 
 `conversation.session.header.actions` 里注册了一个 `deepmemory-flags`，紧挨着会话标题：
 
 ```
-读  写  日
+读  写  日  删
 ```
 
 单字胶囊，**实心 = 开，空心 = 关**，悬停有完整说明。点一下只改**当前会话**这一层（`scope: 'session'`），preset 默认与全局默认都不动。
 
 实心态用的是 `button-primary-fill` + `label-primary-foreground` 这一对，所以亮色下是深底浅字、暗色下自动反过来，不会出现白字配白底。
 
-之所以做成单字：这个槽位「overflow is clipped and faded before the utilities」，长标签会被裁掉；`label` 属性对 list 项是显示文字，但会话头里没有足够宽度承载三个中文词。
+之所以做成单字：这个槽位「overflow is clipped and faded before the utilities」，长标签会被裁掉；`label` 属性对 list 项是显示文字，但会话头里没有足够宽度承载四个中文词。
 
 会话头组件通过 `sessionId` prop 拿到当前会话 id，所以只注册一次就能服务所有对话。
 
@@ -134,8 +141,8 @@ GET  /api/deepmemory/dependency
 GET  /api/deepmemory/diary-task
 POST /api/deepmemory/settings       { scope: global|preset|session|semantic|clear-session, id, flags, presetId }
 POST /api/deepmemory/session-flags  { sessionId, flags | clear: true }
+POST /api/deepmemory/forget         { kind: fact|episode|diary|session, id | day | sessionId }
 POST /api/deepmemory/facts          { text, subject, weight }
-POST /api/deepmemory/forget         { kind: fact|episode|diary, id | day }
 POST /api/deepmemory/rebuild
 POST /api/deepmemory/dependency     { action: 'install' }
 POST /api/deepmemory/diary-task     { action: 'enable', time?, zone?, cwd?, agentPreset? } | { action: 'disable' }

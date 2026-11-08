@@ -93,3 +93,28 @@ test('stats reports every table', () => {
   assert.equal(st.newestDay, dayKey(Date.now()))
   s.close()
 })
+
+test('firstUserLines reports the opening line of each session', () => {
+  const s = fresh()
+  s.saveEpisode({ sessionId: 'a', role: 'user', text: '第一句' })
+  s.saveEpisode({ sessionId: 'a', role: 'user', text: '第二句' })
+  s.saveEpisode({ sessionId: 'b', role: 'user', text: '另一个会话的开头' })
+  const lines = s.firstUserLines()
+  assert.equal(lines.get('a'), '第一句')
+  assert.equal(lines.get('b'), '另一个会话的开头')
+  assert.equal(lines.size, 2)
+  s.close()
+})
+
+test('deleteSession removes only that session episodes and keeps facts', () => {
+  const s = fresh()
+  s.saveEpisode({ sessionId: 'a', role: 'user', text: '要忘掉的这句话' })
+  s.saveEpisode({ sessionId: 'a', role: 'assistant', text: '要忘掉的这句回话' })
+  s.saveEpisode({ sessionId: 'b', role: 'user', text: '别的会话留着' })
+  s.saveFact({ text: '一条独立的事实' })
+  assert.equal(s.deleteSession('a'), 2)
+  assert.equal(s.listEpisodes().length, 1)
+  assert.equal(s.listFacts().length, 1)
+  assert.equal(s.firstUserLines().get('a'), undefined)
+  s.close()
+})

@@ -21,7 +21,7 @@ test('preset override inherits then diverges', () => {
   const { path } = fresh()
   const settings = new MemorySettings(path)
   settings.setFlags('preset', 'companion', { diary: false })
-  assert.deepEqual(settings.presetFlags('companion'), { recall: true, write: true, diary: false })
+  assert.deepEqual(settings.presetFlags('companion'), { recall: true, write: true, diary: false, forget: false })
   assert.deepEqual(settings.presetFlags('feishu-bot'), GLOBAL_DEFAULTS)
 })
 
@@ -31,9 +31,9 @@ test('session override beats preset which beats global', () => {
   settings.setFlags('global', undefined, { write: false })
   settings.setFlags('preset', 'companion', { write: true, recall: false })
   settings.setFlags('session', 's1', { recall: true }, { presetId: 'companion' })
-  assert.deepEqual(settings.sessionFlags('s1', 'companion'), { recall: true, write: true, diary: true })
-  assert.deepEqual(settings.sessionFlags('s2', 'companion'), { recall: false, write: true, diary: true })
-  assert.deepEqual(settings.sessionFlags('s2', 'other'), { recall: true, write: false, diary: true })
+  assert.deepEqual(settings.sessionFlags('s1', 'companion'), { recall: true, write: true, diary: true, forget: false })
+  assert.deepEqual(settings.sessionFlags('s2', 'companion'), { recall: false, write: true, diary: true, forget: false })
+  assert.deepEqual(settings.sessionFlags('s2', 'other'), { recall: true, write: false, diary: true, forget: false })
 })
 
 test('a value equal to the parent is pruned instead of stored', () => {
@@ -76,6 +76,11 @@ test('corrupt file falls back to defaults rather than throwing', () => {
 })
 
 test('sanitizeFlags drops unknown keys and keeps booleans', () => {
-  assert.deepEqual(sanitizeFlags({ recall: false, nonsense: 1 }), { recall: false, write: true, diary: true })
+  assert.deepEqual(sanitizeFlags({ recall: false, nonsense: 1 }), {
+    recall: false,
+    write: true,
+    diary: true,
+    forget: false,
+  })
   assert.deepEqual(sanitizeFlags(null), GLOBAL_DEFAULTS)
 })
