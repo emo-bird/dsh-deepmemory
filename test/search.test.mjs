@@ -105,3 +105,19 @@ test('limit is clamped and results are sorted descending', async () => {
   }
   store.close()
 })
+
+test('a two character query still finds its sentence', async () => {
+  const store = new MemoryStore(':memory:')
+  store.saveEpisode({ sessionId: 's1', presetId: 'p', role: 'user', text: '我记得上次聊过水母图标的颜色', importance: 1 })
+  const search = new MemorySearch(store)
+  const { hits } = await search.search('水母', { limit: 5 })
+  assert.equal(hits.length, 1)
+})
+
+test('a run-together query falls back to character bigrams', async () => {
+  const store = new MemoryStore(':memory:')
+  store.saveEpisode({ sessionId: 's1', presetId: 'p', role: 'user', text: '我记得上次聊过水母图标的颜色', importance: 1 })
+  const search = new MemorySearch(store)
+  const { hits } = await search.search('水母颜色', { limit: 5 })
+  assert.equal(hits.length, 1)
+})

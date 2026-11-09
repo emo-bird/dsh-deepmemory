@@ -84,9 +84,18 @@
 
 `sidebar.panellist` 的 id 与 `main` 的 key 都是 `deepmemory`——侧边栏只认 id 去解析主面板。
 
-六个页签：概览（计数与重建索引）、事实、片段、日记、**会话**、设置。
+七个页签：概览、事实、片段、**搜索**、日记、**会话**、设置。
 
-面板右上角有一个搜索框，回车就跑一次检索（和工具走同一条 `MemorySearch` 流水线，所以面板能搜到的和 agent 能搜到的是同一批），结果按事实 / 片段 / 日记打标签，可以直接删。
+面板右上角有一个搜索框，回车就跳到「搜索」页跑一次检索（和工具走同一条 `MemorySearch`
+流水线，所以面板能搜到的和 agent 能搜到的是同一批），结果按事实 / 片段 / 日记打标签，
+命中的词高亮，可以直接删。搜索是独立页签，所以搜完还能切回去看别的，不必先清空输入框。
+
+检索是模糊的：三个字以上的查询走 FTS5 trigram，短查询补一遍按词的 `LIKE`，
+连成一串的查询（「水母颜色」）在没有整体命中时会退化成字符 bigram 重试——
+所以两三个字的词、只出现在长句里某个片段的词，都还能捞出来，而不是只有完全一致才命中。
+
+「概览」页的「重建检索索引」会回来一行结果（事实 / 片段 / 日记各重建了多少条），
+不再是一闪而过。
 
 「会话」页是逐会话控制台，两张表：
 
@@ -95,7 +104,7 @@
 
 表头固定为「会话 / 首句 / 读 写 日 删」。**首句**优先取 `episodes` 里该会话最早的一条 user 记录（`ROW_NUMBER()` 取，不用 `MIN(created_at)` 自连接——同一毫秒的两条会因此挑错）；没有记录的旧会话回退到 `sessionProjectionCache` 的 `titleInput.first.text`，那是宿主用来生成标题的原始提问，所以老会话也有首句。会话清单来自 `sessionPersistence.list()`，标题走 `sessionProjectionCache.cachedSnapshot`（零 I/O），子代理会话被排除。某行被单独改过时名字下方会出现「已覆盖 · 恢复继承」，开了「删」的会话还会多一条红色「清空本会话记忆」。
 
-「设置」页只有全局默认、每日日记任务、语义检索依赖。
+「设置」页只有全局默认、每日日记任务、语义检索依赖与推荐嵌入模型。
 
 删除有三个入口，都不需要开会话的「删」开关：事实页、片段页、日记页各自的「删除」按钮，以及搜索结果的删除。只有「清空某个会话的全部片段」受「删」开关约束——那是唯一影响一片历史的动作。日记与片段删除前会弹一次确认。
 
@@ -169,6 +178,7 @@ GET  /api/deepmemory/settings
 GET  /api/deepmemory/sessions
 GET  /api/deepmemory/session-flags?sessionId=…
 GET  /api/deepmemory/dependency
+GET  /api/deepmemory/models
 GET  /api/deepmemory/diary-task
 POST /api/deepmemory/settings       { scope: global|preset|session|semantic|clear-session, id, flags, presetId }
 POST /api/deepmemory/session-flags  { sessionId, flags | clear: true }
@@ -176,6 +186,7 @@ POST /api/deepmemory/forget         { kind: fact|episode|diary|session, id | day
 POST /api/deepmemory/facts          { text, subject, weight }
 POST /api/deepmemory/rebuild
 POST /api/deepmemory/dependency     { action: 'install' }
+POST /api/deepmemory/models         { action: install|remove|reveal, model }
 POST /api/deepmemory/diary-task     { action: 'enable', time?, zone?, cwd?, agentPreset? } | { action: 'disable' }
 ```
 
@@ -208,6 +219,22 @@ POST /api/deepmemory/diary-task     { action: 'enable', time?, zone?, cwd?, agen
 - 或者自己把 ONNX 目录放进 `vendor/models`，再把「本地模型目录」指到它（写进 `semantic.modelPath`）
 
 两条都失败时第三档就保持关闭，日志里会说明原因。注意本机实测：镜像能取 `config.json`/`tokenizer.json`，但 `.onnx` 走的是另一个 CDN，Node 的 TLS 校验在这台机器上过不去（`UNABLE_TO_VERIFY_LEAF_SIGNATURE`），所以模型要手工放。
+
+## 推荐嵌入模型
+
+面板「设置」页的「推荐嵌入模型」列了四个 `Xenova/*` 的 ONNX 转换（`BAAI/*` 只有 PyTorch
+权重，指过去必然 404）：`bge-small-zh-v1.5`（24 MB，中文首选）、`bge-base-zh-v1.5`、
+`multilingual-e5-small`、`all-MiniLM-L6-v2`（英文最省）。
+
+- **安装**：真去下载到 `vendor/models`，装完立刻切成那个模型（写 `semantic.model`），
+  这样点完就生效，不用再手动填模型名。
+- **卸载**：删掉 `vendor/models` 下属于它的缓存目录，模型文件不进 profile，删了不影响别的。
+- **打开模型目录**：在文件管理器里打开 `vendor/models`，手动放模型就放这儿。
+
+本机实测的坑：镜像能取 `config.json` / `tokenizer.json`，但 `.onnx` 走的是另一个 CDN，
+Node 的 TLS 校验过不去（`UNABLE_TO_VERIFY_LEAF_SIGNATURE`），`Invoke-WebRequest` 也一样。
+所以这台机器上「安装」多半会失败——失败信息会显示在卡片下方，而不会静默。可行的路是把
+ONNX 目录手工放进 `vendor/models`，再在「本地模型目录」里指过去。
 
 ## 开发
 

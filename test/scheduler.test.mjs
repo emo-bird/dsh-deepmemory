@@ -13,7 +13,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { DEFAULT_TIME, DEFAULT_ZONE, TASK_TITLE, ensureTask, findTask, removeTask, targetDayFor, taskPrompt, taskStatus } from '../lib/scheduler.js'
+import { DEFAULT_TIME, DEFAULT_ZONE, TASK_TITLE, ensureTask, findTask, normalizeTime, removeTask, targetDayFor, taskPrompt, taskStatus } from '../lib/scheduler.js'
 import { installState } from '../lib/embed.js'
 
 function fakeSchedule(seed = []) {
@@ -96,10 +96,11 @@ test('ensureTask creates one daily task at the default time and zone', async () 
   const entry = schedule.entries[0]
   assert.equal(entry.title, TASK_TITLE)
   assert.equal(entry.kind, 'daily')
-  assert.equal(entry.time, DEFAULT_TIME)
+  assert.equal(entry.time, normalizeTime(DEFAULT_TIME))
   assert.equal(entry.timeZone, DEFAULT_ZONE)
   const request = schedule.calls[0][1]
-  assert.deepEqual(request.timing, { kind: 'daily', daily: { time: DEFAULT_TIME, time_zone: DEFAULT_ZONE } })
+  // The service only accepts HH:mm:ss; the panel sends HH:mm.
+  assert.deepEqual(request.timing, { kind: 'daily', daily: { time: normalizeTime(DEFAULT_TIME), time_zone: DEFAULT_ZONE } })
   // A new session per delivery, so the diary is not written into a chat.
   assert.equal(request.target.kind, 'new')
 })
@@ -118,7 +119,7 @@ test('ensureTask retimes instead of creating a second task', async () => {
   await ensureTask(schedule, { time: '23:40' })
   await ensureTask(schedule, { time: '21:15' })
   assert.equal(schedule.entries.length, 1)
-  assert.equal(schedule.entries[0].time, '21:15')
+  assert.equal(schedule.entries[0].time, '21:15:00')
   assert.equal(schedule.calls.at(-1)[0], 'edit')
 })
 
@@ -142,7 +143,7 @@ test('taskStatus reports the schedule the panel renders', async () => {
   await ensureTask(schedule, { time: '21:15' })
   const status = await taskStatus(schedule)
   assert.equal(status.scheduled, true)
-  assert.equal(status.time, '21:15')
+  assert.equal(status.time, '21:15:00')
   assert.equal(status.status, 'active')
 })
 
