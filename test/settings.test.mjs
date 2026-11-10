@@ -44,7 +44,12 @@ test('a value equal to the parent is pruned instead of stored', () => {
   assert.equal('companion' in settings.state.presets, false)
   settings.setFlags('session', 's1', { recall: false }, { presetId: 'companion' })
   settings.clearSession('s1')
-  assert.equal('s1' in settings.state.sessions, false)
+  // The key survives holding null: deleting it would make the next session
+  // listing pin the session again, which is the bug this guards.
+  assert.equal(settings.state.sessions.s1, null)
+  assert.equal(settings.sessionFlags('s1', 'companion').recall, true)
+  assert.equal('s1' in settings.snapshot(['companion']).overrides.sessions, false)
+  assert.equal(settings.pinSession('s1', 'companion'), false)
 })
 
 test('snapshot lists declared presets plus stored overrides', () => {
