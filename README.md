@@ -200,6 +200,8 @@ POST /api/deepmemory/diary-task     { action: 'enable', time?, zone?, cwd?, agen
 
 「什么时候查、什么时候记」由插件自己写（`lib/index.js` 的 `guidanceText()`），注册在 `systemPrompt.section` 上，不塞进任何 preset 的 persona——换 preset 不该换掉记忆的用法。
 
+那段「该查就去查」的督促单独占一个 section（`deepmemory:recall-nudge`），并且**只在「读」开着的会话里存在**：它的 `text` 是个函数，拿得到本次装配的 `agent`，读开关关着就返回空串；空 section 在渲染前会被丢掉，所以关掉时那段话根本不进提示词，不是进了不生效。装配发生在每一轮开始时，改开关下一轮就换。
+
 另外注册一个 `systemPrompt.context`（order 900），每步只说一句：
 
 > 长期记忆：N 条事实、M 条过往片段、K 篇日记。最近一篇日记是 YYYY-MM-DD。需要细节时用 memory_search 查。
