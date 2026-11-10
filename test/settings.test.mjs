@@ -84,3 +84,19 @@ test('sanitizeFlags drops unknown keys and keeps booleans', () => {
   })
   assert.deepEqual(sanitizeFlags(null), GLOBAL_DEFAULTS)
 })
+
+test('pinning a session freezes it against later preset edits', () => {
+  const { path } = fresh()
+  const settings = new MemorySettings(path)
+  settings.setFlags('preset', 'companion', { write: false })
+  assert.equal(settings.sessionFlags('s1', 'companion').write, false)
+  assert.equal(settings.pinSession('s1', 'companion'), true)
+  // Editing the preset afterwards must not move a session that already exists.
+  settings.setFlags('preset', 'companion', { write: true })
+  assert.equal(settings.sessionFlags('s1', 'companion').write, false)
+  // A second pin is a no-op, so the promise holds.
+  assert.equal(settings.pinSession('s1', 'companion'), false)
+  // Clearing the session puts it back under the preset.
+  settings.clearSession('s1')
+  assert.equal(settings.sessionFlags('s1', 'companion').write, true)
+})
