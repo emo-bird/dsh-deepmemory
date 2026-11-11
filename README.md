@@ -30,10 +30,10 @@
 
 ## 写入与注入的门控
 
-三层，越具体越优先：
+两层，越具体越优先（子代理还有一层挂在父会话下面）：
 
 ```
-会话覆盖  >  preset 默认  >  全局默认
+会话覆盖  >  全局默认
 ```
 
 每层四个开关：**读记忆** / **写记忆** / **计入日记** / **删除记忆**。
@@ -45,9 +45,9 @@
 
 「删除记忆」是唯一不可撤销的一维，**全局默认关闭**：打开之后，面板才会允许「清空本会话记忆」——它删的是这个会话的原始片段，事实（facts）不动，因为事实已经脱离会话独立存在。
 
-存储时只写「与父层不同」的键，所以「跟随上层」是默认状态，文件不会膨胀；把值改回与父层相同，那个键会被删掉。
+存储时只写「与父层不同」的键，所以「跟随上层」是默认状态，文件不会膨胀；把值改回与父层相同，那个键会留成 null 墓碑而不是删掉——删掉的键下次列表时会被重新钉住，「恢复继承」就永远失效。
 
-`preset` 那一层是**新会话的默认值**：用该 preset 开出来的会话，没被单独覆盖过就按它走。改 preset 层不会影响已存在的会话。
+全局默认是**新会话的起点**：每个会话创建时读一次当时的值，钉成自己的，之后改全局默认不再影响任何已有会话。子代理另有独立的一层，没被单独钉住时跟随父会话。
 
 ## 工具
 
@@ -70,7 +70,7 @@
 
 ## 日记
 
-**一天一篇，跨会话整合**：把当天所有项目、所有 preset、飞书与 Web 的片段汇总成一篇散文，不是按会话列条目。当天没有对话就不写。
+**一天一篇，跨会话整合**：把当天所有项目、所有会话、飞书与 Web 的片段汇总成一篇散文，不是按会话列条目。当天没有对话就不写。日记任务自己那个会话的独白不计入素材，否则它会把自己的开场白当成「今天唯一的对话」。
 
 **哪些对话进日记由「日」开关决定**：关掉某个会话的「日」，它的片段照常存（写开关管的是存不存），但不会出现在当天的素材里。这个筛选发生在 `dayDigest(store, day, { include })`，由 index.js 传进来的 `diaryAllowed` 决定。
 
@@ -99,7 +99,7 @@
 
 「会话」页是逐会话控制台，两张表：
 
-- **新会话的默认值（按 preset）**：一行一个 preset（显示名 + id，来自 `agentPresets.list()`），勾的是该 preset 新开会话时的起点。
+- **子代理默认值**：同一批会话行，控制这些会话派出去的子代理继承什么。没被钉住就跟随父会话；「恢复继承」写的是 null 墓碑，不是删键。
 - **会话**：一行一个已存储会话，四列开关 + 前两列信息。
 
 表头固定为「会话 / 首句 / 读 写 日 删」。**首句**优先取 `episodes` 里该会话最早的一条 user 记录（`ROW_NUMBER()` 取，不用 `MIN(created_at)` 自连接——同一毫秒的两条会因此挑错）；没有记录的旧会话回退到 `sessionProjectionCache` 的 `titleInput.first.text`，那是宿主用来生成标题的原始提问，所以老会话也有首句。会话清单来自 `sessionPersistence.list()`，标题走 `sessionProjectionCache.cachedSnapshot`（零 I/O），子代理会话被排除。某行被单独改过时名字下方会出现「已覆盖 · 恢复继承」，开了「删」的会话还会多一条红色「清空本会话记忆」。
@@ -147,7 +147,7 @@
 读  写  日  删
 ```
 
-单字胶囊，**实心 = 开，空心 = 关**，悬停有完整说明。点一下只改**当前会话**这一层（`scope: 'session'`），preset 默认与全局默认都不动。
+单字胶囊，**实心 = 开，空心 = 关**，悬停有完整说明。点一下只改**当前会话**这一层（`scope: 'session'`），全局默认不动。
 
 实心态用的是 `button-primary-fill` + `label-primary-foreground` 这一对，所以亮色下是深底浅字、暗色下自动反过来，不会出现白字配白底。
 
@@ -180,8 +180,8 @@ GET  /api/deepmemory/session-flags?sessionId=…
 GET  /api/deepmemory/dependency
 GET  /api/deepmemory/models
 GET  /api/deepmemory/diary-task
-POST /api/deepmemory/settings       { scope: global|preset|session|semantic|clear-session, id, flags, presetId }
-POST /api/deepmemory/session-flags  { sessionId, flags | clear: true }
+POST /api/deepmemory/settings       { scope: global|session|subagent|semantic|clear-session, id, flags, subagent? }
+POST /api/deepmemory/session-flags  { sessionId, scope?: 'subagent', flags | clear: true }
 POST /api/deepmemory/forget         { kind: fact|episode|diary|session, id | day | sessionId }
 POST /api/deepmemory/facts          { text, subject, weight }
 POST /api/deepmemory/rebuild

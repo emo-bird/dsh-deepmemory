@@ -14,61 +14,87 @@ test('missing file reads as global defaults', () => {
   const { path } = fresh()
   const settings = new MemorySettings(path)
   assert.deepEqual(settings.globalFlags(), GLOBAL_DEFAULTS)
-  assert.deepEqual(settings.presetFlags('companion'), GLOBAL_DEFAULTS)
+  // No session on record simply follows the global defaults.
+  assert.deepEqual(settings.sessionFlags('nobody'), GLOBAL_DEFAULTS)
 })
 
-test('preset override inherits then diverges', () => {
-  const { path } = fresh()
-  const settings = new MemorySettings(path)
-  settings.setFlags('preset', 'companion', { diary: false })
-  assert.deepEqual(settings.presetFlags('companion'), { recall: true, write: true, diary: false, forget: false })
-  assert.deepEqual(settings.presetFlags('feishu-bot'), GLOBAL_DEFAULTS)
-})
-
-test('session override beats preset which beats global', () => {
+test('a session override beats the global default', () => {
   const { path } = fresh()
   const settings = new MemorySettings(path)
   settings.setFlags('global', undefined, { write: false })
-  settings.setFlags('preset', 'companion', { write: true, recall: false })
-  settings.setFlags('session', 's1', { recall: true }, { presetId: 'companion' })
-  assert.deepEqual(settings.sessionFlags('s1', 'companion'), { recall: true, write: true, diary: true, forget: false })
-  assert.deepEqual(settings.sessionFlags('s2', 'companion'), { recall: false, write: true, diary: true, forget: false })
-  assert.deepEqual(settings.sessionFlags('s2', 'other'), { recall: true, write: false, diary: true, forget: false })
+  settings.setFlags('session', 's1', { write: true, recall: false })
+  assert.deepEqual(settings.sessionFlags('s1'), { recall: false, write: true, diary: true, forget: false })
+  assert.deepEqual(settings.sessionFlags('s2'), { recall: true, write: false, diary: true, forget: false })
+})
+
+test('editing the global defaults never moves an existing session', () => {
+  const { path } = fresh()
+  const settings = new MemorySettings(path)
+  settings.setFlags('global', undefined, { write: false })
+  assert.equal(settings.pinSession('s1'), true)
+  // The whole point of the design: later edits are future defaults.
+  settings.setFlags('global', undefined, { write: true })
+  assert.equal(settings.sessionFlags('s1').write, false)
+  assert.equal(settings.sessionFlags('s2').write, true)
 })
 
 test('a value equal to the parent is pruned instead of stored', () => {
   const { path } = fresh()
   const settings = new MemorySettings(path)
-  settings.setFlags('preset', 'companion', { diary: false })
-  settings.setFlags('preset', 'companion', { diary: true })
-  assert.equal('companion' in settings.state.presets, false)
-  settings.setFlags('session', 's1', { recall: false }, { presetId: 'companion' })
-  settings.clearSession('s1')
-  // The key survives holding null: deleting it would make the next session
-  // listing pin the session again, which is the bug this guards.
+  settings.setFlags('session', 's1', { recall: false })
+  settings.setFlags('session', 's1', { recall: true })
+  // Equal to the parent again: the key survives holding null, because a deleted
+  // key is indistinguishable from "never seen" and would be pinned afresh.
   assert.equal(settings.state.sessions.s1, null)
-  assert.equal(settings.sessionFlags('s1', 'companion').recall, true)
-  assert.equal('s1' in settings.snapshot(['companion']).overrides.sessions, false)
-  assert.equal(settings.pinSession('s1', 'companion'), false)
+  assert.equal(settings.sessionFlags('s1').recall, true)
+  assert.equal('s1' in settings.snapshot().overrides.sessions, false)
+  assert.equal(settings.pinSession('s1'), false)
 })
 
-test('snapshot lists declared presets plus stored overrides', () => {
+test('restoring inheritance sticks across repeated pins', () => {
   const { path } = fresh()
   const settings = new MemorySettings(path)
-  settings.setFlags('preset', 'hidden', { diary: false })
-  const snap = settings.snapshot(['companion', 'feishu-bot'])
-  assert.deepEqual(Object.keys(snap.presets).sort(), ['companion', 'feishu-bot', 'hidden'])
-  assert.equal(snap.presets.hidden.diary, false)
+  settings.pinSession('s1')
+  settings.setFlags('session', 's1', { diary: false })
+  settings.clearSession('s1')
+  assert.equal(settings.state.sessions.s1, null)
+  // A listing that pins again must not undo the restore.
+  assert.equal(settings.pinSession('s1'), false)
+  assert.equal(settings.sessionFlags('s1').diary, true)
+})
+
+test('subagents follow their parent session until pinned', () => {
+  const { path } = fresh()
+  const settings = new MemorySettings(path)
+  settings.pinSession('s1')
+  settings.setFlags('session', 's1', { write: false })
+  assert.equal(settings.subagentFlags('s1').write, false)
+  settings.setFlags('subagent', 's1', { write: true })
+  assert.equal(settings.subagentFlags('s1').write, true)
+  // The parent's own policy is untouched by its subagent layer.
+  assert.equal(settings.sessionFlags('s1').write, false)
+})
+
+test('snapshot reports both scopes without a preset layer', () => {
+  const { path } = fresh()
+  const settings = new MemorySettings(path)
+  settings.setFlags('session', 's1', { diary: false })
+  settings.setFlags('subagent', 's1', { recall: false })
+  const snap = settings.snapshot()
+  assert.equal('presets' in snap, false)
+  assert.equal(snap.sessions.s1.diary, false)
+  assert.equal(snap.subagents.s1.recall, false)
+  assert.deepEqual(Object.keys(snap.overrides).sort(), ['sessions', 'subagents'])
 })
 
 test('file round-trips through disk', () => {
   const { path } = fresh()
-  new MemorySettings(path).setFlags('preset', 'companion', { write: false })
+  new MemorySettings(path).setFlags('session', 's1', { write: false })
   const reread = new MemorySettings(path)
-  assert.equal(reread.presetFlags('companion').write, false)
+  assert.equal(reread.sessionFlags('s1').write, false)
   const raw = JSON.parse(readFileSync(path, 'utf8'))
   assert.equal(raw.version, 1)
-  assert.deepEqual(raw.presets.companion, { write: false })
+  assert.deepEqual(raw.sessions.s1, { write: false })
 })
 
 test('corrupt file falls back to defaults rather than throwing', () => {
@@ -88,20 +114,4 @@ test('sanitizeFlags drops unknown keys and keeps booleans', () => {
     forget: false,
   })
   assert.deepEqual(sanitizeFlags(null), GLOBAL_DEFAULTS)
-})
-
-test('pinning a session freezes it against later preset edits', () => {
-  const { path } = fresh()
-  const settings = new MemorySettings(path)
-  settings.setFlags('preset', 'companion', { write: false })
-  assert.equal(settings.sessionFlags('s1', 'companion').write, false)
-  assert.equal(settings.pinSession('s1', 'companion'), true)
-  // Editing the preset afterwards must not move a session that already exists.
-  settings.setFlags('preset', 'companion', { write: true })
-  assert.equal(settings.sessionFlags('s1', 'companion').write, false)
-  // A second pin is a no-op, so the promise holds.
-  assert.equal(settings.pinSession('s1', 'companion'), false)
-  // Clearing the session puts it back under the preset.
-  settings.clearSession('s1')
-  assert.equal(settings.sessionFlags('s1', 'companion').write, true)
 })
