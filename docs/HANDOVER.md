@@ -22,13 +22,13 @@
 ## 2. 文件结构与职责
 
 ```
-lib/index.js      64 KB  插件主入口：注册工具、注入提示词、17 条路由、门控
-lib/client.js    122 KB  浏览器半：侧边栏图标 + 主面板（五个页签）+ 会话头胶囊 + 会话窗口「深度记忆」页签 + 新建会话行记忆开关
-lib/store.js      25 KB  sqlite 封装：facts / episodes / diary / meta / vec + 三张 FTS + schema 迁移
-lib/search.js     15 KB  三档检索
-lib/settings.js    9 KB  门控设置（全局 / 会话 / 子代理 三层）+ 补写开关
-lib/diary.js       8 KB  日记素材组装、日界与提示词
-lib/scheduler.js   7 KB  日记定时任务（借助宿主 schedule 服务）+ 立刻运行 + 一次性投递
+lib/index.js      69 KB  插件主入口：注册工具、注入提示词、17 条路由、门控、注册写日记预设
+lib/client.js    130 KB  浏览器半：侧边栏图标 + 主面板（五个页签）+ 会话头胶囊 + 会话窗口「深度记忆」页签 + 新建会话行记忆开关
+lib/store.js      26 KB  sqlite 封装：facts / episodes / diary / meta / vec + 三张 FTS + schema 迁移
+lib/search.js     14 KB  三档检索
+lib/settings.js   12 KB  门控设置（预设 / 预设子代理 / 会话 / 子代理 四层）+ 日记人格与模型 + 补写开关
+lib/diary.js       9 KB  日记素材组装、日界与提示词
+lib/scheduler.js   8 KB  日记定时任务（借助宿主 schedule 服务）+ 立刻运行 + 一次性投递
 lib/embed.js      16 KB  ONNX 嵌入：下载、加载、模型管理
 lib/install.js     9 KB  npm 依赖安装（进 vendor/）
 lib/toolkit.js     5 KB  本地 defineTool 实现（**不能 import @deepseek-ai/dsh-tools**，见第 6 节）
@@ -61,22 +61,24 @@ test/                    六个 .test.mjs + smoke.cjs
 |---|---|
 | git | 见 `git log -1`；`docs/` 在 2026-11-11 由根目录 `HANDOVER.md` 迁入 |
 | 安装 | **已安装并激活**，desktop profile 里是 `link:C:/Project/dsh-deepmemory` 的 junction，改代码刷新页面即生效 |
-| 工具 | 根作用域：`memory_search` / `memory_recall` / `memory_save` / `diary_read` / `memory_forget`；`diary_write` + `diary_material` 只在日记目录的 agent 上注册 |
+| 工具 | 根作用域：`memory_search` / `memory_recall` / `memory_save` / `diary_read` / `memory_forget`；`diary_write` + `diary_material` 只在日记目录的 agent 上注册。插件自己注册预设 `deepmemory-diary` |
 | 17 条路由 | `/stats` `/facts` `/episodes` `/diary` `/day` `/calendar` `/activity` `/search` `/settings` `/forget` `/session-flags` `/rebuild` `/sessions` `/dependency` `/models` `/diary-task` `/backfill` |
-| 面板 | 五个页签：概览 / 搜索 / 记忆 / 会话 / 设置 |
+| 面板 | 五个页签：概览 / 搜索 / 记忆 / 会话 / 设置。所有列表都是**新的在上**（片段、事实、日记页）；设置页按**预设**配默认权限，另有一张「写日记的人格」卡片 |
 | 会话窗口 | 新增「深度记忆」页签（`conversation.view` 槽位，id `deepmemory`，order 35）。宿主只把标签渲染成纯文本，所以水母图标放在这个视图自己的标题行里 |
 | 新建会话页 | 记忆开关（`conversation.hero.options` 槽位，id `deepmemory-hero-flags`，order 20）。与会话头那排小圆点同一份数据、同一个 `/session-flags` 路由 |
 | 语义第三档 | **可用**。依赖已装（542.8 MB），模型已下（bge-small-zh + bge-base-zh），当前用 `Xenova/bge-base-zh-v1.5` |
-| 日记定时任务 | 每天 23:40（`Asia/Shanghai`），target `{kind:'new', cwd: <…>/diary}`；提示词里**不含日期** |
-| 补写 | 写日记时顺带扫最近 7 天（可关）；面板记忆页每天也能单独「补写」 |
-| 测试 | 六个套件全绿：store 10 / search 13 / settings 10 / diary 17 / toolkit 9 / scheduler 16 |
+| 日记定时任务 | 每天 23:40（`Asia/Shanghai`），target `{kind:'new', cwd: <…>/diary, agentPreset:'deepmemory-diary'}`；提示词里**不含日期** |
+| 补写 | 写日记时顺带扫最近 7 天（可关，关掉仍写目标日）；面板记忆页每天也能单独「补写」。`diary_material` 的 `missing` 每条带 `mode: append|fill` |
+| 测试 | 六个套件全绿：store 10 / search 13 / settings 16 / diary 18 / toolkit 9 / scheduler 18 = 84 |
 
-**门控四维与三层**
+**门控四维与四层**
 
 - 四维：`recall`（读记忆 + `diary_read`）/ `write`（写记忆）/ `diary`（片段进不进日记素材）/ `forget`（删记忆，默认 **false**）
-- 全局默认值 `{recall:true, write:true, diary:true, forget:false}`
-- 三层：**全局 → 会话 → 子代理**。会话在创建时（`agent/created` / `sessionsOf`）把当时的全局值**钉住**，之后改全局不影响它。
-- 存储只存**与父层的差异**；「恢复继承」写 `null` 墓碑（不是删键——删了下次 pin 又钉回去）。
+- 内置默认值 `GLOBAL_DEFAULTS = {recall:true, write:true, diary:true, forget:false}`，它是这条链的最底，不是一栏可改的配置
+- 四层：**预设的新会话默认 → 预设的子代理默认 → 会话覆盖 → 子代理覆盖**。会话在创建时（`agent/created` / `sessionsOf`）把当时预设那一层的值**钉住**，之后改预设不影响已有会话。
+- 「全局默认」那一栏已经移除（用户明确要求）：进程级开关和预设级默认同时存在时，谁也说不清某一行到底跟着谁。
+- 存储只存**与父层的差异**（`presets[id].flags` / `presets[id].subagent` / `sessions` / `subagents`）；「恢复继承」写 `null` 墓碑（不是删键——删了下次 pin 又钉回去）。预设那张表某一行全等于内置默认时会整个消失。
+- `Settings` 的调用方一律要带预设 id：`flagsFor(sessionId, fallback)` 在 `lib/index.js:353` 用 `presetOfSession` 查出来再问 settings，所以后端不需要前端传预设。
 
 ---
 
@@ -89,13 +91,18 @@ test/                    六个 .test.mjs + smoke.cjs
 5. **子代理的片段记到父会话名下。** `record()` 里 `owner = parent === '' ? sessionId : parent`，这样日记与搜索只看到一条主线。
 6. **日记会话的独白不算素材。** `record()` 三重排除（内存 Set + 目录判定 + `meta.diarySessions` 持久化集合），`primeDiarySessions()` 启动时扫已存会话头补齐。
 7. **提示词「什么时候查、什么时候记」由插件自己写**（`GUIDANCE_SECTION = 'deepmemory:guidance'`），不塞进任何 preset 的 persona。这是用户明确裁定的分工。
-8. **定时任务的提示词里不能出现日期。** 提示词是一次写入、天天复用的；写死日期就会天天写同一天、然后被「已有就跳过」吞掉——这是 2026-11-11 修掉的「日期冻死」bug。日期由接手的 agent 按投递时刻自己算（日界 04:00），`taskPrompt()` 里留了 `PROMPT_MARK = '这段提示是每天固定投递的'`，`ensureTask()` 靠它识别并修复老版本留下的带日期任务。老任务没人会再去设置页点一次，所以 `apply()` 里在拿到 `schedule` 服务后立刻调 `repairTask()` 改一次提示词（只改 prompt，不动 time / target——那是用户自己设的）。
+8. **定时任务的提示词里不能出现日期。** 提示词是一次写入、天天复用的；写死日期就会天天写同一天、然后被「已有就跳过」吞掉——这是 2026-11-11 修掉的「日期冻死」bug。日期由接手的 agent 按投递时刻自己算（日界 04:00），`taskPrompt()` 里留了 `PROMPT_MARK = '目标日即使已经有日记，也要再写一篇新的'`，`ensureTask()` 靠它识别并修复老版本留下的带日期任务；这条标记跟着指令含义走，指令改了意思标记就要改，好让旧任务在下次激活时被重写。老任务没人会再去设置页点一次，所以 `apply()` 里在拿到 `schedule` 服务后立刻调 `repairTask()` 改一次提示词（只改 prompt，不动 time / target——那是用户自己设的）。
 9. **日记表主键是 `id` 不是 `day`。** 同一天可以有多次投递、多篇日记。同一次投递重复写靠 `(day, origin)` 去重（`origin` 默认是会话 id）；`origin` 为空的手写一律新增。旧库打开时自动迁移：先 `wal_checkpoint(TRUNCATE)` 再整文件备份成 `memory.db.bak-<时间戳>`，然后重建表并重灌 FTS。
 10. **记忆页是唯一的日记入口。** 用户明确不要独立的「日记」页签：日历上点一天 → 点「日记 / 事实 / 片段」→ 右侧出内容。没有日记的那天日历上有缺口标记，右侧给「补写」按钮。补写走 `/backfill`，它**总是**新建一次性投递，把 `day` 写死在那一次的提示词里——定时任务本身是无日期的、补写窗口只有 7 天，跑它写不出用户点的那个旧日子。
 11. **概览的活跃度是一面贡献墙，不是柱图。** 用户点名要 GitHub 主页那种贡献墙。实现是自己写的十来个 CSS 类（11px 一格、一周一列、周一起头），没有引入任何开源项目——只是照那个排法自己画。档位边界取当天数据的 25/50/75 分位，所以安静的日子也看得出层次；格子上的 `missing` 与日历缺口是同一个判断。`/activity` 一次要一年，所以走 `store.activityBetween()` 的三次分组查询，不是 365 × 3 次日查询。
 12. **概览三栏共用一种行，不再各写一套。** 早先左边日记预览是一段裁切的正文 + 整卡点击，右边事实/片段是带 meta、截断、高亮的行——同一份数据两套语法。现在统一成 `MemoryRow`（类别 + 时间 + 两行截断 + 命中词高亮），日记也从「最近一日」改成「最近 4 篇」。用户明确否掉了「展开全文」和「去看这一天」两个按钮：对齐靠 `clamp-2` 两行截断，跳转靠点这一行。贡献墙的悬停说明同理换成自绘的 `.dm-wall-tip`（定位在格子上方），因为浏览器原生 `title` 要等将近一秒、且只有一行，而一格代表一整天。
 13. **会话语义只加槽位，不改宿主。** 页签标签是纯文本，所以图标进不去标签，就放进视图标题行；新建会话的开关用官方 `conversation.hero.options` 槽位，而不是去改宿主那一行。
-14. **「会话」页跟其余几页同一套版式，且不再有整段清空。** 原来是两张表 + 四列复选框 + 行内三个链接（看片段 / 恢复继承 / 清空本会话记忆）。现在是一行一个会话、点行即打开这个会话的记忆（和点一条片段同一个动作，所以「看片段」消失了），四个开关折成 `n/4` 一枚胶囊。**「清空本会话记忆」整条移除**：清空一段历史是破坏性动作，不该挂在列表行上；面板只保留逐条删除，模型侧 `memory_forget` 的 session 分支仍受 `forget` 开关门控。
+14. **「会话」页跟其余几页同一套版式，且不再有整段清空。** 原来是两张表 + 四列复选框 + 行内三个链接（看片段 / 恢复继承 / 清空本会话记忆）。现在是一行一个会话、点行即打开这个会话的记忆（和点一条片段同一个动作，所以「看片段」消失了），四个开关折成 `n/4` 一枚胶囊，**点它就是改这四项**（弹出四行开关 + 恢复继承）——只显示数量、改不了的胶囊等于把开关藏起来。**「清空本会话记忆」整条移除**：清空一段历史是破坏性动作，不该挂在列表行上；面板只保留逐条删除，模型侧 `memory_forget` 的 session 分支仍受 `forget` 开关门控。
+
+15. **写日记有自己的预设，人设与模型在面板里改。** `deepmemory-diary` 由插件在激活时 `agentPresets.register(...)` 注册（不是一个额外的 bundle，因为人设是运行时可改的，而 bundle patch 是静态的），`order: 90`，plugins 只留三样：`@deepseek-ai/dsh-persona`（`prefix` 取自设置页，留空用内置人设）、`@deepseek-ai/dsh-time-context`（时钟——日记靠它算日期）、`@deepseek-ai/dsh-tool-fs`（文件读写）。`complete` 必须保持 `false`，否则 prefix 会成为唯一系统提示，时钟一起没了。**记忆与日记工具不在预设里声明**：它们是本插件在 Host 层注册的，对所有 agent 可见；预设只决定额外挂什么。这才是「日记会话只背几个工具」的实现方式——普通会话仍是 74 个。模型独立：`agent/created` 时如果设置页填了 provider + model，就对落在该预设下的会话调 `agent.model.select(...)`，留空跟随 DSH 全局默认模型。
+16. **改人设立刻生效，但只对下一次投递生效。** `POST /settings { scope:'diary' }` = 落盘 + `remountDiaryPreset()`（先 dispose 再 register，不会越改越多）。DSH 的规则是「已有会话保留启动时的预设版本」，所以在跑的日记会话不会中途换人格，下一次投递才是新的。设置页要说明这一点，不然用户会以为没生效。
+17. **所有列表新的在上。** 片段、事实、日记页的查询一律 `ORDER BY created_at DESC, rowid DESC`（`lib/store.js` 里的 `episodesOfDay` / `pagesOfDay` / `listDiary` / `listFactsBetween`）。唯一例外是 `dayDigest()`：它要吃「这一天」的叙事，所以内部 `.reverse()` 回正序再 `.slice(-MAX_EPISODES)` 保留最近的 400 条。改排序时别把 digest 一起改回去。
+18. **目标日无条件写，历史日只补空缺。** `missingDays()` 里 `day === options.target` 时永远返回 `mode:'append'`（哪怕当天已有页面——10:51 的投递只可能知道上午，晚上那一次必须能再写一篇），其它日子只在「有素材且一篇都没有」时返回 `mode:'fill'`。用户否掉了「改写同一篇」的方案：宁可多一篇，也不要覆盖别人写过的。补写开关只管历史那 7 天，关掉之后目标日照写。
 
 ---
 
@@ -117,11 +124,14 @@ test/                    六个 .test.mjs + smoke.cjs
 - [ ] 概览的日记/事实/片段三种行看起来是不是同一种东西、命中词高亮有没有出现
 - [ ] 贡献墙在亮色/暗色下分档是否看得清、格子里的缺口描边是否认得出、点格子是否落到那一天
 - [ ] 贡献墙的自绘悬停：跟着鼠标走得快不快、会不会被面板边界裁掉
-- [ ] 「会话」页改成列表后：点一行是否打开那个会话的记忆、`n/4` 胶囊的 tooltip 是否读得出来、「恢复继承」还在不在
+- [ ] 「会话」页改成列表后：点一行是否打开那个会话的记忆、`n/4` 胶囊点开后四项是否都能改、「恢复继承」是否只在有覆盖时出现
 - [ ] 会话窗口里「深度记忆」页签在真实布局里是否可用（组件能注册、能渲染，但没人在页面上点过）
 - [ ] 新建会话那一行的小胶囊位置对不对：会不会挤掉模式/模型选择器，弹层会不会被输入框盖住
 - [ ] 定时任务真实投递一次、且日期是它自己算出来的
 - [ ] 「补写」按钮走 `/backfill` 后是否真能在 `diary` 表里落一行
+- [ ] 设置页「每个预设的默认权限」在真实数据下列出的是哪些预设、改一行之后新开会话是否真的按它来
+- [ ] 设置页「写日记的人格」保存后，下一次投递的会话头里 `agentPreset` 是否是 `deepmemory-diary`、人格段是否真的换了
+- [ ] `deepmemory-diary` 出现在新建会话的预设选择器里是否合适（没有 bash 之类，只有文件读写）
 
 ---
 

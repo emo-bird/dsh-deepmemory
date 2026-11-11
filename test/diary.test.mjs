@@ -50,10 +50,23 @@ test('missingDays reports days with material and no page, and ignores empty ones
   const today = days[2]
   store.saveDiary({ day: today, text: '已经有页面', origin: 's1' })
   // `days[1]` has no material at all: not a gap, nothing to write about.
-  const missing = missingDays(store, days)
-  assert.deepEqual(missing, [])
+  assert.deepEqual(missingDays(store, days), [])
   store.deleteDiaryDay(today)
-  assert.deepEqual(missingDays(store, days), [{ day: today, total: 1 }])
+  assert.deepEqual(missingDays(store, days), [{ day: today, total: 1, mode: 'fill', pages: 0 }])
+  store.close()
+})
+
+test('the target day is written again even though it already has a page', () => {
+  const { store } = seed()
+  const day = localDay()
+  store.saveEpisode({ role: 'user', text: '上午说过的话', sessionId: 's1' })
+  store.saveDiary({ day, text: '上午写的那篇', origin: 'run-am' })
+  // The morning page can only know the morning; the evening delivery appends.
+  assert.deepEqual(missingDays(store, [day], { target: day }), [
+    { day, total: 1, mode: 'append', pages: 1 },
+  ])
+  // Without `target` the same day reads as already covered.
+  assert.deepEqual(missingDays(store, [day]), [])
   store.close()
 })
 
@@ -76,7 +89,7 @@ test('a day can hold more than one page', () => {
   assert.notEqual(first.id, second.id)
   assert.deepEqual(
     store.pagesOfDay(day).map((page) => page.text),
-    ['第一份', '第二份'],
+    ['第二份', '第一份'],
   )
   store.close()
 })

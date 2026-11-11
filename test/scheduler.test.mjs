@@ -67,6 +67,7 @@ function fakeSchedule(seed = []) {
         entry.timeZone = request.patch.timing.daily.time_zone
       }
       if (request.patch?.prompt !== undefined) entry.prompt = request.patch.prompt
+      if (request.patch?.target !== undefined) entry.target = request.patch.target
       return { ...entry }
     },
     async run(request) {
@@ -121,6 +122,50 @@ test('repairTask leaves a fresh task alone and reports a missing one', async () 
   const callsBefore = schedule.calls.length
   assert.deepEqual(await repairTask(schedule), { repaired: false, reason: 'fresh' })
   assert.equal(schedule.calls.length, callsBefore)
+})
+
+test('repairTask adds the diary preset to a task that predates it', async () => {
+  const schedule = fakeSchedule([
+    {
+      id: 'task-old',
+      title: TASK_TITLE,
+      prompt: taskPrompt(),
+      kind: 'daily',
+      time: '23:40:00',
+      timeZone: DEFAULT_ZONE,
+      status: 'active',
+      scheduledAt: '2026-11-09T15:40:00.000Z',
+      target: { kind: 'new', create: { cwd: 'C:/Users/me/.dsh/deepmemory/diary' } },
+    },
+  ])
+  const result = await repairTask(schedule, { agentPreset: 'deepmemory-diary' })
+  assert.equal(result.repaired, true)
+  const request = schedule.calls.at(-1)[1]
+  // The prompt is already current, so only the delivery target is touched.
+  assert.deepEqual(Object.keys(request.patch), ['target'])
+  assert.deepEqual(schedule.entries[0].target.create, {
+    cwd: 'C:/Users/me/.dsh/deepmemory/diary',
+    agentPreset: 'deepmemory-diary',
+  })
+  // Second pass: nothing left to do.
+  assert.deepEqual(await repairTask(schedule, { agentPreset: 'deepmemory-diary' }), {
+    repaired: false,
+    reason: 'fresh',
+  })
+})
+
+test('ensureTask retargets a task whose preset changed', async () => {
+  const schedule = fakeSchedule()
+  await ensureTask(schedule, { cwd: 'C:/x', agentPreset: 'standard' })
+  const before = schedule.calls.length
+  await ensureTask(schedule, { cwd: 'C:/x', agentPreset: 'deepmemory-diary' })
+  assert.equal(schedule.calls.length, before + 1)
+  const request = schedule.calls.at(-1)[1]
+  assert.equal(request.patch.target.create.agentPreset, 'deepmemory-diary')
+  // Same preset again is a no-op.
+  const settled = schedule.calls.length
+  await ensureTask(schedule, { cwd: 'C:/x', agentPreset: 'deepmemory-diary' })
+  assert.equal(schedule.calls.length, settled)
 })
 
 test('findTask matches by title and stays undefined when absent', async () => {
