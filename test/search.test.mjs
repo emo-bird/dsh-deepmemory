@@ -9,7 +9,7 @@ const seeded = () => {
   store.saveFact({ text: '鸽鸽在做 DeepSeek Harness 的记忆插件', subject: 'project' })
   store.saveFact({ text: '小肥鱼喜欢吃白米饭和 Token', subject: 'companion' })
   store.saveEpisode({ role: 'user', text: '今天讨论了记忆系统要用 sqlite 存', sessionId: 'session-a' })
-  store.saveDiary('2026-11-08', '今天把存储层写完了，FTS5 中文检索可用。')
+  store.saveDiary({ day: '2026-11-08', text: '今天把存储层写完了，FTS5 中文检索可用。', origin: 'run-a' })
   return { store, search }
 }
 

@@ -8,27 +8,27 @@
 ## 1. 这是什么
 
 `@emo-bird/dsh-deepmemory` —— 一个 DSH bundle，给 Harness 提供**跨会话的长期记忆**，
-并在侧边栏加一个「深度记忆」面板当控制台。
+并在侧边栏加一个「深度记忆」面板当控制台，另外在每个会话窗口里加一个「对话记忆」页签。
 
-一句话架构：**一个 sqlite 文件 + 三档检索 + 六个工具 + 一个 Connection 路由 + React 面板。**
+一句话架构：**一个 sqlite 文件 + 三档检索 + 五个常驻工具 + 一个 Connection 路由 + React 面板。**
 
 - 数据库：`C:\Users\一门鸽鸽\.dsh\deepmemory\memory.db`
 - 设置：同目录 `settings.json`
 - 模型：`C:\Project\dsh-deepmemory\vendor\models\`
-- 注册在**根平面**，所有 preset 的会话都能用（前提是那个 preset 的 tool-fence 白名单放行了这六个工具）
+- 注册在**根平面**，所有 preset 的会话都能用（前提是那个 preset 的 tool-fence 白名单放行了这几个工具）
 
 ---
 
 ## 2. 文件结构与职责
 
 ```
-lib/index.js      53 KB  插件主入口：注册工具、注入提示词、13 条路由、门控
-lib/client.js     71 KB  浏览器半：侧边栏 + 主面板 + 会话头胶囊（七个页签）
-lib/store.js      15 KB  sqlite 封装：facts / episodes / diary / meta / vec + 三张 FTS
-lib/search.js     12 KB  三档检索
-lib/settings.js    8 KB  门控设置（全局 / 会话 / 子代理 三层）
-lib/diary.js       5 KB  日记素材组装与提示词
-lib/scheduler.js   5 KB  日记定时任务（借助宿主 schedule 服务）
+lib/index.js      64 KB  插件主入口：注册工具、注入提示词、17 条路由、门控
+lib/client.js    100 KB  浏览器半：侧边栏图标 + 主面板（五个页签）+ 会话头胶囊 + 会话窗口「对话记忆」页签
+lib/store.js      25 KB  sqlite 封装：facts / episodes / diary / meta / vec + 三张 FTS + schema 迁移
+lib/search.js     15 KB  三档检索
+lib/settings.js    9 KB  门控设置（全局 / 会话 / 子代理 三层）+ 补写开关
+lib/diary.js       8 KB  日记素材组装、日界与提示词
+lib/scheduler.js   7 KB  日记定时任务（借助宿主 schedule 服务）+ 立刻运行 + 一次性投递
 lib/embed.js      16 KB  ONNX 嵌入：下载、加载、模型管理
 lib/install.js     9 KB  npm 依赖安装（进 vendor/）
 lib/toolkit.js     5 KB  本地 defineTool 实现（**不能 import @deepseek-ai/dsh-tools**，见第 6 节）
@@ -36,10 +36,11 @@ cordis.patch.yml         bundle 挂载行
 locale/{en,zh}.json      展示元数据 meta.title/description
 icon.svg                 水母图标（与侧边栏图标同一份 path）
 scripts/install-embed.mjs 无头安装嵌入依赖
+docs/1.xml               面板布局原始规格（用户给的，改动前先对一遍）
 reference/               asar 抽取件，被 .gitignore 排除，仅 README.md 入库
 vendor/                  542.8 MB，被 .gitignore 排除
 local/                   用户私有目录，被 .gitignore 排除
-test/                    六个 .test.mjs + 一堆临时脚本
+test/                    六个 .test.mjs + smoke.cjs
 ```
 
 **核心数据模型**
@@ -48,8 +49,8 @@ test/                    六个 .test.mjs + 一堆临时脚本
 |---|---|
 | `facts` | 长期事实（scope / subject / text / weight / 来源会话与 preset） |
 | `episodes` | 对话片段（**只记 user 消息**，按 session_id 归属） |
-| `diary` | 一天一篇 |
-| `meta` | 键值（`diarySessions` 存日记会话 id，换行分隔） |
+| `diary` | **一天可以有多篇**。主键是 `id`，`day` 上建了索引，`origin` 记录是哪次投递写的 |
+| `meta` | 键值（`diarySessions` 存日记会话 id，换行分隔；`schemaVersion` 存 2） |
 | `vec` | 向量（当前未用，第三档是即时算的） |
 
 ---
@@ -58,14 +59,16 @@ test/                    六个 .test.mjs + 一堆临时脚本
 
 | 项 | 状态 |
 |---|---|
-| git | 干净，`c46e600 fix(diary): learn the existing diary sessions…` |
-| 安装 | **已安装并激活**（`include:deepmemory` → `fiberPhase: active`） |
-| 六个工具 | `memory_search` / `memory_recall` / `memory_save` / `diary_read` / `memory_forget` 注册在根作用域；`diary_write` + `diary_material` 只在日记目录的 agent 上注册 |
-| 13 条路由 | `/stats` `/facts` `/episodes` `/diary` `/search` `/settings` `/forget` `/session-flags` `/rebuild` `/sessions` `/dependency` `/models` `/diary-task` |
-| 面板 | 七个页签：概览 / 事实 / 片段 / 搜索 / 日记 / 会话 / 设置 |
+| git | 见 `git log -1`；`docs/` 在 2026-11-11 由根目录 `HANDOVER.md` 迁入 |
+| 安装 | **已安装并激活**，desktop profile 里是 `link:C:/Project/dsh-deepmemory` 的 junction，改代码刷新页面即生效 |
+| 工具 | 根作用域：`memory_search` / `memory_recall` / `memory_save` / `diary_read` / `memory_forget`；`diary_write` + `diary_material` 只在日记目录的 agent 上注册 |
+| 17 条路由 | `/stats` `/facts` `/episodes` `/diary` `/day` `/calendar` `/activity` `/search` `/settings` `/forget` `/session-flags` `/rebuild` `/sessions` `/dependency` `/models` `/diary-task` `/backfill` |
+| 面板 | 五个页签：概览 / 搜索 / 记忆 / 会话 / 设置 |
+| 会话窗口 | 新增「对话记忆」页签（`conversation.view` 槽位，id `deepmemory`，order 35） |
 | 语义第三档 | **可用**。依赖已装（542.8 MB），模型已下（bge-small-zh + bge-base-zh），当前用 `Xenova/bge-base-zh-v1.5` |
-| 日记定时任务 | 每天 23:40，target `{kind:'new', cwd: <…>/diary}` |
-| 测试 | 六个套件全绿：store 10 / search 13 / settings 10 / diary 9 / toolkit 9 / scheduler 13 |
+| 日记定时任务 | 每天 23:40（`Asia/Shanghai`），target `{kind:'new', cwd: <…>/diary}`；提示词里**不含日期** |
+| 补写 | 写日记时顺带扫最近 7 天（可关）；面板记忆页每天也能单独「补写」 |
+| 测试 | 六个套件全绿：store 10 / search 13 / settings 10 / diary 17 / toolkit 9 / scheduler 16 |
 
 **门控四维与三层**
 
@@ -85,6 +88,9 @@ test/                    六个 .test.mjs + 一堆临时脚本
 5. **子代理的片段记到父会话名下。** `record()` 里 `owner = parent === '' ? sessionId : parent`，这样日记与搜索只看到一条主线。
 6. **日记会话的独白不算素材。** `record()` 三重排除（内存 Set + 目录判定 + `meta.diarySessions` 持久化集合），`primeDiarySessions()` 启动时扫已存会话头补齐。
 7. **提示词「什么时候查、什么时候记」由插件自己写**（`GUIDANCE_SECTION = 'deepmemory:guidance'`），不塞进任何 preset 的 persona。这是用户明确裁定的分工。
+8. **定时任务的提示词里不能出现日期。** 提示词是一次写入、天天复用的；写死日期就会天天写同一天、然后被「已有就跳过」吞掉——这是 2026-11-11 修掉的「日期冻死」bug。日期由接手的 agent 按投递时刻自己算（日界 04:00），`taskPrompt()` 里留了 `PROMPT_MARK = '这段提示是每天固定投递的'`，`ensureTask()` 靠它识别并修复老版本留下的带日期任务。老任务没人会再去设置页点一次，所以 `apply()` 里在拿到 `schedule` 服务后立刻调 `repairTask()` 改一次提示词（只改 prompt，不动 time / target——那是用户自己设的）。
+9. **日记表主键是 `id` 不是 `day`。** 同一天可以有多次投递、多篇日记。同一次投递重复写靠 `(day, origin)` 去重（`origin` 默认是会话 id）；`origin` 为空的手写一律新增。旧库打开时自动迁移：先 `wal_checkpoint(TRUNCATE)` 再整文件备份成 `memory.db.bak-<时间戳>`，然后重建表并重灌 FTS。
+10. **记忆页是唯一的日记入口。** 用户明确不要独立的「日记」页签：日历上点一天 → 点「日记 / 事实 / 片段」→ 右侧出内容。没有日记的那天日历上有缺口标记，右侧给「补写」按钮。补写走 `/backfill`，它**总是**新建一次性投递，把 `day` 写死在那一次的提示词里——定时任务本身是无日期的、补写窗口只有 7 天，跑它写不出用户点的那个旧日子。
 
 ---
 
@@ -94,18 +100,18 @@ test/                    六个 .test.mjs + 一堆临时脚本
 - [ ] **事实不自动提炼**。`facts` 现在只有模型主动 `memory_save` 才写入；对话里没有「这件事值得记」的自动抽取。
 - [ ] **facts 的作用域恒为 global**。表里有 `scope` 列但没写过别的值。
 - [ ] **不能编辑事实与权重**（面板只能删）。
-- [ ] **没有导出 / 备份**。
+- [ ] **没有导出 / 备份**（除了迁移时那一次自动备份）。
 - [ ] **去重靠精确文本匹配**（同文本不同说法会各存一条）。
 - [ ] **会话记忆隔离（方案 b）** —— 用户明说「先记着，现在不做」。设计已想好：设置层加 `isolation`（global / workspace / session），召回时按范围过滤、写入时把 scope 写成 `global` / `workspace:<hash>` / `session:<id>`；老数据不用迁移。
+- [ ] **对话记忆页签里不能补写**（那里只读，因为可写的是按天归属的日记，跟单个会话对不上）。
 
 ### 未测试（需要在浏览器里亲眼看）
-- [ ] 刷新页面 → 设置页模型卡片式布局（新改的，还没人看过）
-- [ ] 会话页两张表的开关**点完不弹回**（加了 drafts，未目视确认）
-- [ ] 「恢复继承」标签立刻消失（加了 `onReload`，未目视确认）
-- [ ] 改全局默认后，已有会话的勾选**不变**
-- [ ] 搜索引擎第三档真正参与重排（只验证过 `createEmbedder` 返回 `dim 512`）
-- [ ] 日记定时任务**真实写出过一篇**（2026-11-11 那次命中「今天不写日记」的空转 bug，已修但未复测）
-- [ ] 面板在**亮色主题**下的观感
+- [ ] 重写后的五个页签在**亮色主题**下的观感
+- [ ] 记忆页日历的活跃度分档是否够明显、缺口标记是否看得清
+- [ ] 概览页的最近一日预览点「去看这一天」是否真的跳到记忆页那一天
+- [ ] 会话窗口里「对话记忆」页签在真实布局里是否可用（组件能注册、能渲染，但没人在页面上点过）
+- [ ] 定时任务真实投递一次、且日期是它自己算出来的
+- [ ] 「补写」按钮走 `/backfill` 后是否真能在 `diary` 表里落一行
 
 ---
 
@@ -125,6 +131,7 @@ test/                    六个 .test.mjs + 一堆临时脚本
 - **注册以 path 为键，不看 method** → 同一路径的 GET 与 POST 必须合并成一条 `route(path, {GET, POST})`（会 `connection: exact Fetch route … already registered`）。
 - `fetch` 拿的是 WHATWG `Request`，必须返回 `Response`。
 - GET 会自动带上 HEAD；未命中 method 返回 405。
+- 直接用 `Invoke-WebRequest` 打 `http://127.0.0.1:45127/api/...` 会拿到 **401**——那些路由只认浏览器里带签名的连接通道，不能命令行验证。
 
 ### 面板（client.js）
 - 只 `require('react')`，**禁止 require 任何 Harness Client 包**。
@@ -132,6 +139,7 @@ test/                    六个 .test.mjs + 一堆临时脚本
 - 主题包里只有 114 个 `--dsw-alias-*`，`--dsw-alias-text-primary` / `-surface-secondary` 这类**不存在**。
 - **渲染期抛错会让整个面板白屏**。凡从路由拿回的东西先 `Array.isArray()` 兜底。
 - 面板改动只需刷新页面（client 半热更新）；host 半要重载插件。
+- 会话窗口里的页签走 `ctx.slots.register({name:'conversation.view', id:'deepmemory', order, label})`，复用**已有的**标准 props（`props.sessionId`），不需要自己开路由。`label` 用函数形式，切语言时会重读。
 
 ### 下载与网络
 - **这台机器对 huggingface.co 完全不通**，`hf-mirror.com` 只有小文件能过，`.onnx` 走另一个 CDN 必挂 `UNABLE_TO_VERIFY_LEAF_SIGNATURE`。pwsh / Invoke-WebRequest 也一样。
@@ -163,17 +171,16 @@ cd C:\Project\dsh-deepmemory
 # 或 npm test（逐文件串联）
 ```
 
-- `test/smoke.cjs`：假 `window.__ModuleLoader__` + 假 React，验证 client bundle 能加载并注册三个 slot。
-- `test/_render.cjs`：逐页签强制渲染（`DM_TAB=overview|facts|episodes|search|diary|sessions|settings`）。
-- `test/_routes2.cjs`：假 ctx 跑路由，验证 `settingsSnapshot()` 形状。
-- **所有 `test/_*` 都被 `.gitignore` 拦住，不提交。** 这些是临时调试脚本，可以随时删。
+- `test/smoke.cjs`：假 `window.__ModuleLoader__` + 假 React，验证 client bundle 能加载并注册**四个** slot（侧边栏图标 / 主面板 / 会话头胶囊 / 会话窗口页签）。
+- 迁移要在**真的库的副本**上先试：复制 `memory.db` + `-wal` 到临时目录，`new MemoryStore(db)` 看 `backup` / `pages` / `stats` / `rebuildFts`。
+- 面板的浏览器验证：工具里没有浏览器自动化时，只能确认「bundle 能加载 + 四个槽位注册成功 + 每个视图能渲染不抛错」，观感必须人眼看。
 
 ---
 
 ## 8. 下一步建议（按优先级）
 
-1. **先让人在浏览器里过一遍第 5 节的「未测试」清单**。改了很多 UI，还没人看过。
-2. 复测日记：等一个真的有对话的日子，看 23:40 之后 `diary` 表是否多一行。
+1. **先让人在浏览器里过一遍第 5 节的「未测试」清单**。UI 整个重写了，还没人看过。
+2. 复测日记：等一个真的有对话的日子，确认定时任务写出的是**当天**、不是被冻住的旧日期。
 3. 补「事实自动提炼」（最大功能缺口）。
 4. 补导出 / 备份。
 5. 会话记忆隔离（方案 b）——用户说先记着。

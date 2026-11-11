@@ -2,7 +2,7 @@
 
 深度记忆插件：跨会话的长期记忆 + 侧边栏控制台。
 
-一个本地 SQLite 文件存四类东西——**事实**（facts，长期有效的一句话）、**片段**（episodes，双方说过的话——用户说的话和助手回的话都记）、**日记**（diary，一天一篇）、**向量**（vec，可选的嵌入索引）。会话日志才是真源，这个库是可以在任何时候重建的缓存。
+一个本地 SQLite 文件存四类东西——**事实**（facts，长期有效的一句话）、**片段**（episodes，双方说过的话——用户说的话和助手回的话都记）、**日记**（diary，一天可以有多篇，一次投递一篇）、**向量**（vec，可选的嵌入索引）。会话日志才是真源，这个库是可以在任何时候重建的缓存。
 
 - 包名：`@emo-bird/dsh-deepmemory`
 - 插件 id：`deepmemory`
@@ -70,21 +70,29 @@
 
 ## 日记
 
-**一天一篇，跨会话整合**：把当天所有项目、所有会话、飞书与 Web 的片段汇总成一篇散文，不是按会话列条目。当天没有对话就不写。日记任务自己那个会话的独白不计入素材，否则它会把自己的开场白当成「今天唯一的对话」。三重排除：运行期集合、meta.diarySessions 持久表（重启后仍生效）、以及工作目录等于 diary 的会话头扫描——最后这条在插件启动时补跑一次，用来覆盖规则存在之前就写进库的旧行。
+**一天可以有不止一篇，但一次投递只写一篇**：定时任务每次投递拿到的「来历」（origin，就是投递会话的 id）是稳定的一串，同一天里再投一次才会多写一篇。同一篇被修订时按 origin 覆盖，不会越改越多。表用 `id` 做主键、`day` 上建索引——早期版本把 `day` 当主键，一天只能有一行，这就是「同日多份」改掉的地方。升级时旧库会被**自动备份**（`memory.db.bak-<时间戳>`），旧行原样搬进新表，`diary_fts` 一起重建，失败则整体回滚。
+
+**跨会话整合**：把当天所有项目、所有会话、飞书与 Web 的片段汇总成一篇散文，不是按会话列条目。当天没有对话就不写。日记任务自己那个会话的独白不计入素材，否则它会把自己的开场白当成「今天唯一的对话」。三重排除：运行期集合、meta.diarySessions 持久表（重启后仍生效）、以及工作目录等于 diary 的会话头扫描——最后这条在插件启动时补跑一次，用来覆盖规则存在之前就写进库的旧行。
 
 **哪些对话进日记由「日」开关决定**：关掉某个会话的「日」，它的片段照常存（写开关管的是存不存），但不会出现在当天的素材里。这个筛选发生在 `dayDigest(store, day, { include })`，由 index.js 传进来的 `diaryAllowed` 决定。
 
 由 DSH 定时任务在固定时间开一个新会话（工作目录 `<数据目录>/diary`），模型先调 `diary_material` 取素材、写完调 `diary_write` 落盘。插件本身不含任何模型调用。
 
-- `lib/diary.js` 的 `composeInstruction(day)` 是那段指令；素材走工具，不塞进 prompt
+- `lib/diary.js` 的 `composeInstruction(day)` 是那段指令，不传 `day` 时要求模型按投递时刻自己算日期；素材走工具，不塞进 prompt
+- `targetDay()` 是那条日界规则：04:00 之前算「昨天」，04:00 之后算「今天」（`DAY_CUTOFF_HOUR`）
 - `renderDigest` 按会话分组、按时间排序，单条截断 400 字，最多 400 条
 - 日记日界用**本地时间**（`localDay`），`store.js` 里 episodes 的 `day` 字段也是本地日期——用 UTC 会把凌晨的消息记到前一天
+
+**补写缺失的日子**有两种触发，都不需要人手动改日期：
+
+- 写日记时顺带扫最近 `BACKFILL_DAYS`（7）天，有素材但没写的一并补上。`diary_material` 的返回值里带 `missing` 列表，提示词要求模型照着补。这个行为可以在设置页关掉。
+- 「记忆」页选某一天、选「日记」，当天没日记时右边会出现**补写**按钮，走 `POST /backfill { day }`：总是临时建一个只写这一天的一次性任务（`kind: 'after'`，2 秒后投递），把 `day` 写进那一次的提示词。不复用定时任务——它本身没有日期、补写窗口也只有 7 天，写不出你点的那个旧日子。
 
 ## 侧边栏面板
 
 `sidebar.panellist` 的 id 与 `main` 的 key 都是 `deepmemory`——侧边栏只认 id 去解析主面板。
 
-七个页签：概览、事实、片段、**搜索**、日记、**会话**、设置。
+五个页签：**概览**、**搜索**、**记忆**、**会话**、设置。
 
 面板右上角有一个搜索框，回车就跳到「搜索」页跑一次检索（和工具走同一条 `MemorySearch`
 流水线，所以面板能搜到的和 agent 能搜到的是同一批），结果按事实 / 片段 / 日记打标签，
@@ -94,8 +102,15 @@
 连成一串的查询（「水母颜色」）在没有整体命中时会退化成字符 bigram 重试——
 所以两三个字的词、只出现在长句里某个片段的词，都还能捞出来，而不是只有完全一致才命中。
 
-「概览」页的「重建检索索引」会回来一行结果（事实 / 片段 / 日记各重建了多少条），
-不再是一闪而过。
+**「概览」**是 `docs/1.xml` 里那一版布局：顶上一行指标，下面两栏——左边近 7 日活跃度柱图（柱高是当天的片段 + 事实数，越活跃越不透明，就是「越活跃颜色越鲜艳」）加最近一日日记的预览（超过两行折叠，点「展开全文」；点「去看这一天」跳到记忆页并定位那天）；右边最近 3 条事实、最近 5 条片段，每条都能点进对应的那一天。底部的「重建检索索引」会回来一行结果（事实 / 片段 / 日记各重建了多少条），不再是一闪而过。
+
+**「搜索」**页把检索参数摆出来了：搜索框、时间范围（全部 / 近 7 / 30 / 90 天）、类别（事实 / 片段 / 日记，至少留一个）。结果**按类别分组依次展示**，命中的词高亮，点条目跳到记忆页的那一天，右边可以直接删。
+
+**「记忆」**页是日历 + 三枚目录按钮 + 右栏内容：
+
+- 左栏日历，一天一格。格子的底色深浅表示当天的活跃度（相对当前这一页里最忙的那天分四档），**当天有素材却没有日记的日子右下角有一个小圆点**——那是缺口标记，一眼就能看出哪天漏了。
+- 日历下面三枚按钮：**日记 / 事实 / 片段**。事实和片段没有子项，点了右栏直接铺当天全部；**日记有子项**，子项是当天的每一篇（同日可以有多篇，并列显示）。
+- 右栏显示「选中那天 + 选中类别」的内容。选了「日记」而那天没有日记时，右栏是空态「这一天没有日记」加一个**补写**按钮。
 
 「会话」页是逐会话控制台，两张表：
 
@@ -106,7 +121,7 @@
 
 「设置」页只有全局默认、每日日记任务、语义检索依赖与推荐嵌入模型。
 
-删除有三个入口，都不需要开会话的「删」开关：事实页、片段页、日记页各自的「删除」按钮，以及搜索结果的删除。只有「清空某个会话的全部片段」受「删」开关约束——那是唯一影响一片历史的动作。日记与片段删除前会弹一次确认。
+删除的入口都在「记忆」页右栏：每条事实、每条片段、每一篇日记右边都有「删除」。搜索页的结果也能直接删。这些都不需要开会话的「删」开关，只有「清空某个会话的全部片段」受它约束——那是唯一影响一片历史的动作。日记与片段删除前会弹一次确认。
 
 ## 配色与主题
 
@@ -155,12 +170,24 @@
 
 会话头组件通过 `sessionId` prop 拿到当前会话 id，所以只注册一次就能服务所有对话。
 
+## 会话窗口里的「对话记忆」页签
+
+`conversation.view` 是宿主给「每个会话从哪几个视图里挑一个渲染」留的槽位：注册进去的每一项都是同一排页签里的一格，宿主把 owner props（`sessionId`、`openView` 等）发给每个条目。这里注册了一个 id 为 `deepmemory`、`order: 35` 的条目，标签是「对话记忆」；**用全新 id 而不是复用宿主已有的 id**——复用会顶掉那一格，而不是并排多出一个。
+
+它渲染的就是「记忆」页那块板子（同一个 `MemoryBoard` 组件），只是固定带上当前会话的 `sessionId`，于是：
+
+- 日历只算这个会话的片段与事实；
+- 目录按钮只有**事实**和**片段**两枚（一篇日记属于「哪一天」，不属于「哪一句话」，所以会话视图里不提供日记，也不提供补写）；
+- 右栏铺的就是这个会话在那一天的原文。
+
+数据全走已有的 `/calendar` 与 `/day` 两个接口的 `sessionId` 参数，没有为这个页签新增任何路由。
+
 ## 日记定时任务
 
 面板「设置」页可以开启，落到 DSH 的 `schedule` 服务（`kind: 'daily'`），默认 `23:40` / `Asia/Shanghai`，`target` 是 `{ kind: 'new', create: { cwd, agentPreset } }`——每次投递开一个新会话，不会写进聊天里。
 
 - 任务的唯一身份是标题 `深度记忆 · 写日记`；`ensureTask` 按标题查目录，已存在且时间相同就直接返回，时间不同则 `edit` 改期，不会造出第二个任务
-- 日期按投递时间算：小时 < 4 视为「补昨晚」，否则就是当天（`targetDayFor`）
+- 提示词里**不写日期**：每次投递都是同一段话，日期由模型按投递时刻自己算（04:00 之前算昨天，之后算今天）。早期版本把当天日期烤进 prompt，一次写死之后就永远是那一天，日记也就再也写不出来了；`ensureTask` 现在会检查 prompt 里有没有 `PROMPT_MARK`，没有就就地修好
 - 当天没素材时不写：prompt 里明确要求回「今天没有素材，不写日记」且不调 `diary_write`
 - 插件自身不发任何模型调用，也不轮询——一切由 DSH 的定时系统驱动
 
@@ -170,25 +197,33 @@
 
 ```
 GET  /api/deepmemory/stats
+GET  /api/deepmemory/activity?days=7
+GET  /api/deepmemory/calendar?from=YYYY-MM-DD&to=YYYY-MM-DD[&sessionId=…]
+GET  /api/deepmemory/day?day=YYYY-MM-DD[&sessionId=…]
 GET  /api/deepmemory/facts?limit=200
 GET  /api/deepmemory/episodes?limit=100&day=YYYY-MM-DD
-GET  /api/deepmemory/diary
-GET  /api/deepmemory/search?q=…
+GET  /api/deepmemory/diary?limit=30[&day=YYYY-MM-DD][&offset=…]
+GET  /api/deepmemory/search?q=…&kinds=fact,episode,diary&from=…&to=…&sessionId=…
 GET  /api/deepmemory/settings
 GET  /api/deepmemory/sessions
 GET  /api/deepmemory/session-flags?sessionId=…
 GET  /api/deepmemory/dependency
 GET  /api/deepmemory/models
 GET  /api/deepmemory/diary-task
-POST /api/deepmemory/settings       { scope: global|session|subagent|semantic|clear-session, id, flags, subagent? }
+POST /api/deepmemory/settings       { scope: global|session|subagent|semantic|backfill|clear-session, id, flags, enabled, subagent? }
 POST /api/deepmemory/session-flags  { sessionId, scope?: 'subagent', flags | clear: true }
 POST /api/deepmemory/forget         { kind: fact|episode|diary|session, id | day | sessionId }
 POST /api/deepmemory/facts          { text, subject, weight }
 POST /api/deepmemory/rebuild
 POST /api/deepmemory/dependency     { action: 'install' }
 POST /api/deepmemory/models         { action: install|remove|reveal, model }
-POST /api/deepmemory/diary-task     { action: 'enable', time?, zone?, cwd?, agentPreset? } | { action: 'disable' }
+POST /api/deepmemory/diary-task     { action: 'enable', time?, zone?, cwd?, agentPreset? } | { action: 'disable' } | { action: 'run' }
+POST /api/deepmemory/backfill       { day, agentPreset? }
 ```
+
+`/calendar` 与 `/day` 都收一个可选的 `sessionId`，收到就整个页面窄到那一个会话：日记不出现（一篇日记属于「哪一天」，不属于「哪一句话」），事实与片段按 `source_session` / `session_id` 过滤，缺口标记也不再算——补写是全局的事，不在会话页里提供。会话窗口里的「对话记忆」页签就是同一个 `/day` + `/calendar`，只是固定带上 `sessionId`。
+
+`/backfill` 是「记忆」页那个补写按钮：总是新建一次性投递，`202` 加 `mode: 'once'` 和 `taskId`；`400` 是 `day` 不成 `YYYY-MM-DD`，`409` 是宿主拒绝投递，`503` 是没有 `schedule` 服务。
 
 `GET /dependency` 的响应里带一个 `progress`：`{ phase: 'idle'|'installing'|'done'|'error', bytes, totalBytes, startedAt, finishedAt, error }`。npm 不报字节，所以 Host 在装的时候每秒量一次 `vendor/` 的大小当作进度，`totalBytes` 是估算的 600 MB（实测一次完整安装约 575 MB——onnxruntime-node 把每个平台的 native 运行时都装了）。面板每 900 ms 拉一次这个接口，把「安装中…」变成「12.4 MB / 320.0 MB（4%）」。这是一个进度提示，不是倒计时；装完显示的是实测落盘大小。
 

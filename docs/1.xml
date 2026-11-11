@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<layout>
+  <header>
+    <region r="1" c="1">
+      <component type="pluginHeader">
+        <pluginName>插件名</pluginName>
+        <metricsSummary>展示当前事实、片段等基础指标的数量</metricsSummary>
+      </component>
+    </region>
+  </header>
+
+  <pages>
+    <page id="overview" name="概览页">
+      <grid>
+        <region r="1" c="1">
+          <component type="metricsSummary" data="当前事实、片段等基础指标的数量" />
+        </region>
+
+        <region r="2" c="1">
+          <component type="activityTrend" range="近7日" data="各指标数量" visual="越活跃颜色越鲜艳" />
+        </region>
+
+        <region r="3-4" c="1">
+          <component type="diaryPreview" limit="最近一日日记" overflow="过长折叠" interaction="点击条目跳转" />
+        </region>
+
+        <region r="3" c="2">
+          <component type="factList" limit="最近3条事实" overflow="过长折叠" interaction="点击条目跳转" />
+        </region>
+
+        <region r="4" c="2">
+          <component type="fragmentList" limit="最近5条片段" overflow="过长折叠" interaction="点击条目跳转" />
+        </region>
+      </grid>
+    </page>
+
+    <page id="search" name="搜索页">
+      <grid>
+        <region r="1" c="1">
+          <component type="searchBox" />
+        </region>
+
+        <region r="2" c="1">
+          <component type="searchSettings">
+            <setting name="时间范围设置" />
+            <setting name="类别设置" />
+          </component>
+        </region>
+
+        <region r="3" c="1">
+          <component type="searchResults" groupedByCategory="true" order="依次展示不同类别搜索结果" interaction="点击条目跳转" />
+        </region>
+      </grid>
+    </page>
+
+    <page id="memory" name="记忆页">
+      <grid>
+        <region r="1" c="1">
+          <component type="calendar" visual="日期背景色体现某日活跃度" />
+        </region>
+
+        <region r="2" c="1">
+          <component type="categoryButtons" interaction="点击后右侧展示当日所有此类内容">
+            <category>日历</category>
+            <category>事实</category>
+            <category>片段</category>
+          </component>
+        </region>
+
+        <region r="1-2" c="2">
+          <component type="displayPanel" data="当日所选类别全部内容" />
+        </region>
+      </grid>
+    </page>
+
+    <page id="conversationMemory" name="对话记忆页">
+      <grid>
+        <region r="1" c="1">
+          <component type="calendar" visual="日期背景色体现某日活跃度" />
+        </region>
+
+        <region r="2" c="1">
+          <component type="categoryButtons" interaction="点击后右侧展示当日所有此类内容">
+            <category>事实</category>
+            <category>片段</category>
+          </component>
+        </region>
+
+        <region r="1-2" c="2">
+          <component type="displayPanel" data="当前会话的事实、片段" scope="currentSession" />
+        </region>
+      </grid>
+    </page>
+  </pages>
+</layout>

@@ -13,7 +13,20 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { DEFAULT_TIME, DEFAULT_ZONE, TASK_TITLE, ensureTask, findTask, normalizeTime, removeTask, targetDayFor, taskPrompt, taskStatus } from '../lib/scheduler.js'
+import {
+  DEFAULT_TIME,
+  DEFAULT_ZONE,
+  TASK_TITLE,
+  deliverOnce,
+  ensureTask,
+  findTask,
+  normalizeTime,
+  removeTask,
+  repairTask,
+  runTaskNow,
+  taskPrompt,
+  taskStatus,
+} from '../lib/scheduler.js'
 import { installState } from '../lib/embed.js'
 
 function fakeSchedule(seed = []) {
@@ -53,33 +66,61 @@ function fakeSchedule(seed = []) {
         entry.time = request.patch.timing.daily.time
         entry.timeZone = request.patch.timing.daily.time_zone
       }
+      if (request.patch?.prompt !== undefined) entry.prompt = request.patch.prompt
+      return { ...entry }
+    },
+    async run(request) {
+      calls.push(['run', request])
+      const entry = entries.find((item) => item.id === request.id)
+      if (entry === undefined) return { id: request.id, code: 'schedule_not_found' }
       return { ...entry }
     },
   }
 }
 
-test('targetDayFor reads a late-evening schedule as the same day', () => {
-  assert.equal(targetDayFor('23:40'), targetDayFor(DEFAULT_TIME))
-  const day = targetDayFor('23:40')
-  assert.match(day, /^\d{4}-\d{2}-\d{2}$/)
-})
-
-test('targetDayFor reads an after-midnight schedule as the day that just ended', () => {
-  // previousDay() is local-time based; compare against the same contract.
-  const early = targetDayFor('00:10')
-  const late = targetDayFor('23:40')
-  assert.notEqual(early, late)
-})
-
-test('the delivered prompt names the day and forbids rewriting an existing page', () => {
-  const prompt = taskPrompt('2026-11-07')
-  assert.match(prompt, /2026-11-07/)
+test('the delivered prompt carries no literal date', () => {
+  const prompt = taskPrompt()
+  // The bug this guards: a date written once would make every later delivery
+  // write that same day, and diary_read would then always say "already written".
+  assert.doesNotMatch(prompt, /\d{4}-\d{2}-\d{2}/)
+  assert.match(prompt, /自己算/)
   assert.match(prompt, /diary_read/)
-  assert.match(prompt, /不要重写|跳过/)
   assert.match(prompt, /diary_material/)
   assert.match(prompt, /diary_write/)
-  // The no-material escape hatch has to be explicit, or the agent invents a day.
   assert.match(prompt, /今天没有素材/)
+})
+
+test('repairTask rewrites only the prompt of a dated task', async () => {
+  const schedule = fakeSchedule([
+    {
+      id: 'task-old',
+      title: TASK_TITLE,
+      prompt: '写 2026-11-07 这一天的日记。',
+      kind: 'daily',
+      time: '23:40:00',
+      timeZone: DEFAULT_ZONE,
+      status: 'active',
+      scheduledAt: '2026-11-09T15:40:00.000Z',
+      target: { kind: 'new', create: { cwd: 'somewhere' } },
+    },
+  ])
+  const result = await repairTask(schedule)
+  assert.equal(result.repaired, true)
+  const request = schedule.calls.at(-1)[1]
+  // Only the prompt: retiming or re-targeting here would silently undo a user's
+  // own settings whenever the plugin happens to reload.
+  assert.deepEqual(Object.keys(request.patch), ['prompt'])
+  assert.doesNotMatch(schedule.entries[0].prompt, /2026-11-07/)
+  assert.equal(schedule.entries[0].time, '23:40:00')
+})
+
+test('repairTask leaves a fresh task alone and reports a missing one', async () => {
+  const schedule = fakeSchedule()
+  assert.deepEqual(await repairTask(schedule), { repaired: false, reason: 'no-task' })
+  await ensureTask(schedule, {})
+  const callsBefore = schedule.calls.length
+  assert.deepEqual(await repairTask(schedule), { repaired: false, reason: 'fresh' })
+  assert.equal(schedule.calls.length, callsBefore)
 })
 
 test('findTask matches by title and stays undefined when absent', async () => {
@@ -114,6 +155,24 @@ test('ensureTask is idempotent: a second call with the same time changes nothing
   assert.equal(schedule.calls.length, 1)
 })
 
+test('ensureTask repairs a task still carrying a dated prompt', async () => {
+  const schedule = fakeSchedule([
+    {
+      id: 'task-old',
+      title: TASK_TITLE,
+      prompt: '写 2026-11-07 这一天的日记。',
+      kind: 'daily',
+      time: normalizeTime(DEFAULT_TIME),
+      timeZone: DEFAULT_ZONE,
+      status: 'active',
+      scheduledAt: '2026-11-09T15:40:00.000Z',
+    },
+  ])
+  await ensureTask(schedule, {})
+  assert.equal(schedule.calls.at(-1)[0], 'edit')
+  assert.doesNotMatch(schedule.entries[0].prompt, /2026-11-07/)
+})
+
 test('ensureTask retimes instead of creating a second task', async () => {
   const schedule = fakeSchedule()
   await ensureTask(schedule, { time: '23:40' })
@@ -135,6 +194,26 @@ test('removeTask deletes the task and reports when there was none', async () => 
   await ensureTask(schedule, {})
   assert.deepEqual(await removeTask(schedule), { deleted: true })
   assert.equal(schedule.entries.length, 0)
+})
+
+test('runTaskNow delivers without touching the schedule', async () => {
+  const schedule = fakeSchedule()
+  assert.deepEqual(await runTaskNow(schedule), { ran: false, reason: 'no-task' })
+  await ensureTask(schedule, { time: '21:15' })
+  assert.deepEqual(await runTaskNow(schedule), { ran: true })
+  assert.equal(schedule.entries[0].time, '21:15:00')
+  assert.equal(schedule.entries[0].status, 'active')
+})
+
+test('deliverOnce creates a one-shot aimed at its own day', async () => {
+  const schedule = fakeSchedule()
+  const result = await deliverOnce(schedule, { title: '深度记忆 · 补写 2026-11-02', prompt: '写 2026-11-02', cwd: 'C:/d' })
+  assert.equal(result.created, true)
+  const [kind, request] = schedule.calls[0]
+  assert.equal(kind, 'create')
+  assert.equal(request.timing.kind, 'after')
+  assert.equal(request.target.kind, 'new')
+  assert.match(request.title, /2026-11-02/)
 })
 
 test('taskStatus reports the schedule the panel renders', async () => {
