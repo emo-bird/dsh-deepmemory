@@ -2,11 +2,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { MemoryStore } from '../lib/store.js'
 import {
-  BACKFILL_DAYS,
   composeInstruction,
   dayDigest,
   localDay,
-  missingDays,
   previousDay,
   recentDays,
   renderDigest,
@@ -40,43 +38,6 @@ test('recentDays ends at the given day and is oldest first', () => {
   // Crossing a month boundary must not produce a rolled-over key.
   assert.deepEqual(recentDays('2026-11-01', 2), ['2026-10-31', '2026-11-01'])
   assert.deepEqual(recentDays('2026-11-07', 0), [])
-})
-
-test('missingDays reports days with material and no page, and ignores empty ones', () => {
-  const { store } = seed()
-  const day = localDay()
-  const days = recentDays(day, 3)
-  store.saveEpisode({ role: 'user', text: '写了日记的一天', sessionId: 's1' })
-  const today = days[2]
-  store.saveDiary({ day: today, text: '已经有页面', origin: 's1' })
-  // `days[1]` has no material at all: not a gap, nothing to write about.
-  assert.deepEqual(missingDays(store, days), [])
-  store.deleteDiaryDay(today)
-  assert.deepEqual(missingDays(store, days), [{ day: today, total: 1, mode: 'fill', pages: 0 }])
-  store.close()
-})
-
-test('the target day is written again even though it already has a page', () => {
-  const { store } = seed()
-  const day = localDay()
-  store.saveEpisode({ role: 'user', text: '上午说过的话', sessionId: 's1' })
-  store.saveDiary({ day, text: '上午写的那篇', origin: 'run-am' })
-  // The morning page can only know the morning; the evening delivery appends.
-  assert.deepEqual(missingDays(store, [day], { target: day }), [
-    { day, total: 1, mode: 'append', pages: 1 },
-  ])
-  // Without `target` the same day reads as already covered.
-  assert.deepEqual(missingDays(store, [day]), [])
-  store.close()
-})
-
-test('missingDays honours the include filter', () => {
-  const { store } = seed()
-  const day = localDay()
-  store.saveEpisode({ role: 'user', text: '不计入日记', sessionId: 'drop' })
-  assert.deepEqual(missingDays(store, [day], { include: () => false }), [])
-  assert.equal(missingDays(store, [day]).length, 1)
-  store.close()
 })
 
 test('a day can hold more than one page', () => {
@@ -161,8 +122,14 @@ test('a one-shot instruction names its day', () => {
   assert.match(text, /2026-11-07/)
 })
 
-test('the instruction carries the backfill window', () => {
-  assert.match(composeInstruction(), new RegExp(String(BACKFILL_DAYS)))
+test('the instruction writes one day and refuses to survey the week', () => {
+  const text = composeInstruction()
+  assert.match(text, /不要顺带写别的日子/)
+  assert.match(text, /不由你判断/)
+  // No window, no count: the writer is not asked to look for missing days.
+  assert.doesNotMatch(text, /最近 ?\d+ ?天/)
+  assert.doesNotMatch(text, /补写窗口/)
+  assert.doesNotMatch(text, /missing/)
 })
 
 test('the include filter drops conversations that opted out of the diary', () => {

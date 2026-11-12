@@ -89,10 +89,12 @@
 - `renderDigest` 按会话分组、按时间排序，单条截断 400 字，最多 400 条
 - 日记日界用**本地时间**（`localDay`），`store.js` 里 episodes 的 `day` 字段也是本地日期——用 UTC 会把凌晨的消息记到前一天
 
-**补写缺失的日子**有两种触发，都不需要人手动改日期：
+**补写和重写只由人发起，写手不自己找活**：定时任务那一次只写它自己那一天，不扫「最近几天缺不缺」，也不去查哪个日子还没有日记。早期版本让模型自己补缺，结果是投递到一半先发现今天没素材、又发现昨天已经写过，然后就结束了——用户要的是「我叫你写哪一天，你写哪一天」。
 
-- 写日记时顺带扫最近 `BACKFILL_DAYS`（7）天，有素材但**一篇都没有**的一并补上。`diary_material` 的返回值里带 `missing` 列表，每条都标明 `mode`：`append`（目标日，即使已有页面也再写一篇）或 `fill`（历史日子，只补空缺），提示词要求模型照着补。这个扫描可以在设置页关掉；关掉之后仍然只写目标日那一次（`mode: 'append'`），不会退回到「有日记就跳过」。
-- 「记忆」页选某一天、选「日记」，当天没日记时右边会出现**补写**按钮，走 `POST /backfill { day }`：总是临时建一个只写这一天的一次性任务（`kind: 'after'`，2 秒后投递），把 `day` 写进那一次的提示词。不复用定时任务——它本身没有日期、补写窗口也只有 7 天，写不出你点的那个旧日子。
+- **补写**：「记忆」页选某一天、选「日记」，那天没有日记时白天会出现**补写**按钮，走 `POST /backfill { day }`：临时建一个只写这一天的一次性任务（`kind: 'after'`，2 秒后投递），把 `day` 写进那一次的提示词。
+- **重写**：日期标题行右侧的**重写这一天**按钮，走 `POST /backfill { day, mode: 'rewrite' }`。它**不覆盖**原来那篇，而是给这一天再加一篇——同一件事换个时候再写一遍，旧的那篇留着可读。
+- 两个按钮都不会去跑定时任务：那条提示没有日期，跑起来只会写「今天」，写不出你点的那个旧日子。
+- **错过的那次不自动补**：宿主在停机后只会补投最新一次错过的发生（见下面的定时任务一节），所以那天的日记会缺。面板在概览顶端和记忆页顶端各显示一条提醒「定时任务错过了 YYYY-MM-DD」，旁边带一个只补那一天的**补写**按钮；那天有了日记，提醒自己就不见了，不需要点「已读」。
 
 ## 侧边栏面板
 
@@ -227,7 +229,7 @@ GET  /api/deepmemory/session-flags?sessionId=…
 GET  /api/deepmemory/dependency
 GET  /api/deepmemory/models
 GET  /api/deepmemory/diary-task
-POST /api/deepmemory/settings       { scope: preset|preset-subagent|session|subagent|semantic|diary|backfill|clear-session, id, flags, enabled, diary }
+POST /api/deepmemory/settings       { scope: preset|preset-subagent|session|subagent|semantic|diary|clear-session, id, flags, diary }
 POST /api/deepmemory/session-flags  { sessionId, scope?: 'subagent', flags | clear: true }
 POST /api/deepmemory/forget         { kind: fact|episode|diary|session, id | day | sessionId }
 POST /api/deepmemory/facts          { text, subject, weight }
@@ -235,16 +237,19 @@ POST /api/deepmemory/rebuild
 POST /api/deepmemory/dependency     { action: 'install' }
 POST /api/deepmemory/models         { action: install|remove|reveal, model }
 POST /api/deepmemory/diary-task     { action: 'enable', time?, zone?, cwd?, agentPreset? } | { action: 'disable' } | { action: 'run' }
-POST /api/deepmemory/backfill       { day, agentPreset? }
+POST /api/deepmemory/backfill       { day, mode?, agentPreset? }
+GET  /api/deepmemory/missed
 ```
 
 `/calendar` 与 `/day` 都收一个可选的 `sessionId`，收到就整个页面窄到那一个会话：日记不出现（一篇日记属于「哪一天」，不属于「哪一句话」），事实与片段按 `source_session` / `session_id` 过滤，缺口标记也不再算——补写是全局的事，不在会话页里提供。会话窗口里的「深度记忆」页签就是同一个 `/day` + `/calendar`，只是固定带上 `sessionId`。
 
-`/settings` 的 `scope` 说明：`preset` / `preset-subagent` 写某个预设的默认值（`id` 是预设 id），`session` / `subagent` 写某个会话自己那一层（`id` 是会话 id，预设由插件按会话查出来，不用前端传），`diary` 写写日记的人格与模型（`{ persona, provider, model }`，落盘后立刻重挂预设），`semantic` / `backfill` / `clear-session` 各自一个开关。**`global` 已经不存在**：进程级的「全局默认」被预设层取代了。
+`/settings` 的 `scope` 说明：`preset` / `preset-subagent` 写某个预设的默认值（`id` 是预设 id），`session` / `subagent` 写某个会话自己那一层（`id` 是会话 id，预设由插件按会话查出来，不用前端传），`diary` 写写日记的人格与模型（`{ persona, provider, model }`，落盘后立刻重挂预设），`semantic` / `clear-session` 各自一个开关。**`global` 和 `backfill` 都不存在了**：进程级的「全局默认」被预设层取代，「写日记时顺带补一周」那个开关随自动补写一起删掉了——补写现在只有人在面板里点。
 
 `/activity?days=371` 供概览那面贡献墙用（`days` 夹在 1..400）；它不做「一天一次」的三连查，而是走 `MemoryBoard` 之外的 `store.activityBetween(fromDay, toDay)`，一次拿三个分组计数。每个格子还带一个 `missing`：当天有片段或事实、却没有日记。
 
-`/backfill` 是「记忆」页那个补写按钮：总是新建一次性投递，`202` 加 `mode: 'once'` 和 `taskId`；`400` 是 `day` 不成 `YYYY-MM-DD`，`409` 是宿主拒绝投递，`503` 是没有 `schedule` 服务。
+`/backfill` 是「记忆」页那两个按钮：`{ day }` 是补写（那天没有日记），`{ day, mode: 'rewrite' }` 是重写（那天已有日记，再写一篇新的，旧的留着）。两者都新建一次性投递、都不跑定时任务，`202` 加 `mode: 'once'`、`rewrite` 和 `taskId`；`400` 是 `day` 不成 `YYYY-MM-DD`，`409` 是宿主拒绝投递，`503` 是没有 `schedule` 服务。
+
+`/missed` 是那条错过的提醒：读定时任务最后一次投递的 `scheduledAt` 与 `deliveredAt`，两边各自按 04:00 日界折算成「目标日」，不相等就说明前一个目标日那一次被跳过了；那天的日记已经存在、或者这次错过已经超过 30 天，就什么都不返回。返回一条就够面板显示一行字加一个补写按钮，不需要任何「已读」状态。
 
 `GET /dependency` 的响应里带一个 `progress`：`{ phase: 'idle'|'installing'|'done'|'error', bytes, totalBytes, startedAt, finishedAt, error }`。npm 不报字节，所以 Host 在装的时候每秒量一次 `vendor/` 的大小当作进度，`totalBytes` 是估算的 600 MB（实测一次完整安装约 575 MB——onnxruntime-node 把每个平台的 native 运行时都装了）。面板每 900 ms 拉一次这个接口，把「安装中…」变成「12.4 MB / 320.0 MB（4%）」。这是一个进度提示，不是倒计时；装完显示的是实测落盘大小。
 

@@ -85,10 +85,13 @@ test('the delivered prompt carries no literal date', () => {
   // write that same day, and diary_read would then always say "already written".
   assert.doesNotMatch(prompt, /\d{4}-\d{2}-\d{2}/)
   assert.match(prompt, /自己算/)
-  assert.match(prompt, /diary_read/)
   assert.match(prompt, /diary_material/)
   assert.match(prompt, /diary_write/)
   assert.match(prompt, /今天没有素材/)
+  // One day only: the recurring run must not survey the week for gaps.
+  assert.match(prompt, /只写这一天/)
+  assert.match(prompt, /不要顺带补别的日子/)
+  assert.doesNotMatch(prompt, /补写窗口/)
 })
 
 test('repairTask rewrites only the prompt of a dated task', async () => {

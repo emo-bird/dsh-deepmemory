@@ -26,7 +26,7 @@ lib/index.js      69 KB  插件主入口：注册工具、注入提示词、17 �
 lib/client.js    132 KB  浏览器半：侧边栏图标 + 主面板（五个页签）+ 输入框角落的记忆开关菜单 + 会话窗口「深度记忆」页签
 lib/store.js      26 KB  sqlite 封装：facts / episodes / diary / meta / vec + 三张 FTS + schema 迁移
 lib/search.js     14 KB  三档检索
-lib/settings.js   12 KB  门控设置（预设 / 预设子代理 / 会话 / 子代理 四层）+ 日记人格与模型 + 补写开关
+lib/settings.js   12 KB  门控设置（预设 / 预设子代理 / 会话 / 子代理 四层）+ 日记人格与模型
 lib/diary.js       9 KB  日记素材组装、日界与提示词
 lib/scheduler.js   8 KB  日记定时任务（借助宿主 schedule 服务）+ 立刻运行 + 一次性投递
 lib/embed.js      16 KB  ONNX 嵌入：下载、加载、模型管理
@@ -62,14 +62,16 @@ test/                    六个 .test.mjs + smoke.cjs
 | git | 见 `git log -1`；`docs/` 在 2026-11-11 由根目录 `HANDOVER.md` 迁入 |
 | 安装 | **已安装并激活**，desktop profile 里是 `link:C:/Project/dsh-deepmemory` 的 junction，改代码刷新页面即生效 |
 | 工具 | 根作用域：`memory_search` / `memory_recall` / `memory_save` / `diary_read` / `memory_forget`；`diary_write` + `diary_material` 只在日记目录的 agent 上注册。插件自己注册预设 `deepmemory-diary` |
-| 17 条路由 | `/stats` `/facts` `/episodes` `/diary` `/day` `/calendar` `/activity` `/search` `/settings` `/forget` `/session-flags` `/rebuild` `/sessions` `/dependency` `/models` `/diary-task` `/backfill` |
+| 18 条路由 | `/stats` `/facts` `/episodes` `/diary` `/day` `/calendar` `/activity` `/search` `/settings` `/forget` `/session-flags` `/rebuild` `/sessions` `/dependency` `/models` `/diary-task` `/backfill` `/missed` |
 | 面板 | 五个页签：概览 / 搜索 / 记忆 / 会话 / 设置。所有列表都是**新的在上**（片段、事实、日记页）；设置页按**预设**配默认权限，另有一张「写日记的人格」卡片 |
 | 会话窗口 | 新增「深度记忆」页签（`conversation.view` 槽位，id `deepmemory`，order 35）。宿主只把标签渲染成纯文本，所以水母图标放在这个视图自己的标题行里 |
 | 输入框角落 | 四个记忆开关（`conversation.input.right` 槽位，id `deepmemory-flags`，order 30）。**唯一画法**：`FlagsMenu` 组件，`react-dom` 门户到 body，配色照抄宿主 `Menu` 原语。会话页每行、设置页每个预设的两行用的都是它。原会话头胶囊与 `conversation.hero.options` 那枚都已移除 |
 | 语义第三档 | **可用**。依赖已装（542.8 MB），模型已下（bge-small-zh + bge-base-zh），当前用 `Xenova/bge-base-zh-v1.5` |
 | 日记定时任务 | 每天 23:55（`Asia/Shanghai`，用户自己改过），target `{kind:'new', cwd: <…>/diary, agentPreset:'deepmemory-diary'}`；提示词里**不含日期**；错过的那一次开机后补投一次 |
-| 补写 | 写日记时顺带扫最近 7 天（可关，关掉仍写目标日）；面板记忆页每天也能单独「补写」。`diary_material` 的 `missing` 每条带 `mode: append|fill` |
-| 测试 | 六个套件全绿：store 10 / search 13 / settings 16 / diary 18 / toolkit 9 / scheduler 18 = 84 |
+| 补写 / 重写 | **只由人在面板里发起**。记忆页点开某天 → 选「日记」：没日记给「补写」，有日记给「重写这一天」（重写是再加一篇，不覆盖）。两者都走 `POST /backfill`，`mode` 区分；`day` 写死在那一次的一次性投递里 |
+| 错过的投递 | 不自动补。`GET /missed` 比较 `lastDelivery` 的 `scheduledAt` 与 `deliveredAt` 各自归属的目标日（按 04:00 日界），给出「定时任务错过了某天」；概览和记忆页顶部各一条提醒，按钮按那一天补写，那天有页面后提醒自己消失 |
+| 写手不检测缺口 | 日记会话只写要求它的那一天：`diary_material` 只返回一天；`missingDays()` / `BACKFILL_DAYS` / 补写开关 / `diary_material` 的 `missing` 字段**全部删除**（用户的第 3 条要求） |
+| 测试 | 六个套件全绿：store 10 / search 13 / settings 16 / diary 15 / toolkit 9 / scheduler 18 = 81；`test/smoke.cjs` 另渲染四个槽位（31 个节点） |
 | 日记会话工具 | `restrict({ allow })` 白名单九项（`diary_read` + 四个 `memory_*` + `read`/`write`/`edit`），从 79 个压到九个；名单先与 `ctx.tools.definitions()` 的真实全局名取交集 |
 
 **门控四维与四层**
@@ -94,7 +96,7 @@ test/                    六个 .test.mjs + smoke.cjs
 7. **提示词「什么时候查、什么时候记」由插件自己写**（`GUIDANCE_SECTION = 'deepmemory:guidance'`），不塞进任何 preset 的 persona。这是用户明确裁定的分工。
 8. **定时任务的提示词里不能出现日期。** 提示词是一次写入、天天复用的；写死日期就会天天写同一天、然后被「已有就跳过」吞掉——这是 2026-11-11 修掉的「日期冻死」bug。日期由接手的 agent 按投递时刻自己算（日界 04:00），`taskPrompt()` 里留了 `PROMPT_MARK = '目标日即使已经有日记，也要再写一篇新的'`，`ensureTask()` 靠它识别并修复老版本留下的带日期任务；这条标记跟着指令含义走，指令改了意思标记就要改，好让旧任务在下次激活时被重写。老任务没人会再去设置页点一次，所以 `apply()` 里在拿到 `schedule` 服务后立刻调 `repairTask()` 改一次提示词（只改 prompt，不动 time / target——那是用户自己设的）。
 9. **日记表主键是 `id` 不是 `day`。** 同一天可以有多次投递、多篇日记。同一次投递重复写靠 `(day, origin)` 去重（`origin` 默认是会话 id）；`origin` 为空的手写一律新增。旧库打开时自动迁移：先 `wal_checkpoint(TRUNCATE)` 再整文件备份成 `memory.db.bak-<时间戳>`，然后重建表并重灌 FTS。
-10. **记忆页是唯一的日记入口。** 用户明确不要独立的「日记」页签：日历上点一天 → 点「日记 / 事实 / 片段」→ 右侧出内容。没有日记的那天日历上有缺口标记，右侧给「补写」按钮。补写走 `/backfill`，它**总是**新建一次性投递，把 `day` 写死在那一次的提示词里——定时任务本身是无日期的、补写窗口只有 7 天，跑它写不出用户点的那个旧日子。
+10. **记忆页是唯一的日记入口。** 用户明确不要独立的「日记」页签：日历上点一天 → 点「日记 / 事实 / 片段」→ 右侧出内容。没有日记的那天日历上有缺口标记，右侧给「补写」按钮（已有日记时给「重写这一天」）。两者都走 `/backfill`，它**总是**新建一次性投递，把 `day` 写死在那一次的提示词里——定时任务本身是无日期的，跑它只写得出「今天」，写不出用户点的那个旧日子。
 11. **概览的活跃度是一面贡献墙，不是柱图。** 用户点名要 GitHub 主页那种贡献墙。实现是自己写的十来个 CSS 类（11px 一格、一周一列、周一起头），没有引入任何开源项目——只是照那个排法自己画。档位边界取当天数据的 25/50/75 分位，所以安静的日子也看得出层次；格子上的 `missing` 与日历缺口是同一个判断。`/activity` 一次要一年，所以走 `store.activityBetween()` 的三次分组查询，不是 365 × 3 次日查询。
 12. **概览三栏共用一种行，不再各写一套。** 早先左边日记预览是一段裁切的正文 + 整卡点击，右边事实/片段是带 meta、截断、高亮的行——同一份数据两套语法。现在统一成 `MemoryRow`（类别 + 时间 + 两行截断 + 命中词高亮），日记也从「最近一日」改成「最近 4 篇」。用户明确否掉了「展开全文」和「去看这一天」两个按钮：对齐靠 `clamp-2` 两行截断，跳转靠点这一行。贡献墙的悬停说明同理换成自绘的 `.dm-wall-tip`（定位在格子上方），因为浏览器原生 `title` 要等将近一秒、且只有一行，而一格代表一整天。
 13. **会话语义只加槽位，不改宿主。** 页签标签是纯文本，所以图标进不去标签，就放进视图标题行；新建会话的开关用官方 `conversation.hero.options` 槽位，而不是去改宿主那一行。
@@ -103,12 +105,13 @@ test/                    六个 .test.mjs + smoke.cjs
 15. **写日记有自己的预设，人设与模型在面板里改。** `deepmemory-diary` 由插件在激活时 `agentPresets.register(...)` 注册（不是一个额外的 bundle，因为人设是运行时可改的，而 bundle patch 是静态的），`order: 90`，plugins 只留三样：`@deepseek-ai/dsh-persona`（`prefix` 取自设置页，留空用内置人设）、`@deepseek-ai/dsh-time-context`（时钟——日记靠它算日期）、`@deepseek-ai/dsh-tool-fs`（文件读写）。`complete` 必须保持 `false`，否则 prefix 会成为唯一系统提示，时钟一起没了。**记忆与日记工具不在预设里声明**：它们是本插件在 Host 层注册的，对所有 agent 可见；预设只决定额外挂什么。这才是「日记会话只背几个工具」的实现方式——普通会话仍是 74 个。模型独立：`agent/created` 时如果设置页填了 provider + model，就对落在该预设下的会话调 `agent.model.select(...)`，留空跟随 DSH 全局默认模型。
 16. **改人设立刻生效，但只对下一次投递生效。** `POST /settings { scope:'diary' }` = 落盘 + `remountDiaryPreset()`（先 dispose 再 register，不会越改越多）。DSH 的规则是「已有会话保留启动时的预设版本」，所以在跑的日记会话不会中途换人格，下一次投递才是新的。设置页要说明这一点，不然用户会以为没生效。
 17. **所有列表新的在上。** 片段、事实、日记页的查询一律 `ORDER BY created_at DESC, rowid DESC`（`lib/store.js` 里的 `episodesOfDay` / `pagesOfDay` / `listDiary` / `listFactsBetween`）。唯一例外是 `dayDigest()`：它要吃「这一天」的叙事，所以内部 `.reverse()` 回正序再 `.slice(-MAX_EPISODES)` 保留最近的 400 条。改排序时别把 digest 一起改回去。
-19. **四个开关只有一个画法，而且必须门户出去。** `FlagsMenu` 一个组件服务三处：输入框右下角（`conversation.input.right`，order 30，当前会话）、会话页每行（那一行的会话）、设置页每个预设的两行（该预设的新会话 / 子代理默认值）。菜单用 `react-dom` 的 `createPortal` 挂到 `document.body`，因为输入框那一列会 `overflow: hidden`，宿主的弹层也是这么做的（`Menu` 原语里 `.portal{position:fixed;z-index:1100}`）。样式照抄 `dsh-client-ui-primitives/lib/Menu.module.css` 与 `MenuSurface.module.css` 的规则：`--dsw-menu-surface-fill` 底、`--dsw-menu-backdrop-filter` 模糊、`--dsw-elevation-prominent` 投影、`--dsw-radius-lg` 圆角、行 `min-height:30px` / `padding:5px 8px` / 悬停 `--dsw-alias-interactive-bg-hover`、图标 `--dsw-alias-menu-icon`。这些 token 不在 `Theme.listTokens` 的短名单里，要去样式表里找（`reference/_theme_client.js` 有全集）。`@deepseek-ai/dsh-client-ui-context-menu` 是右键菜单，不是点击弹出的下拉，别拿它做这个。
-20. **会话头那排单字胶囊与新建会话行那枚都撤了。** 用户的原话是「胶囊删掉，改成和新会话一样出现在对话框角落的菜单」：同一件事原来有三种长相（单字胶囊、hero 小胶囊、设置页四个 Toggle），现在是三种位置、一个组件。`conversation.hero.options` 那条注册整个移除——会话还不存在时四个开关没有可写的地方，这一段交给「按预设的默认权限」。
-21. **日记会话的工具是白名单，不是黑名单。** `DIARY_TOOLS` 八项 + `restrict({ allow })`。两个坑：`restrict` 只认**全局**工具名，scope-local 名会让整个过滤器失败，所以名单先和 `ctx.tools.definitions()` 的真实全局名取交集；`diary_write`/`diary_material` 挂在 agent 作用域上，按宿主规则「scoped registrations remain visible」本来就在，**不要**写进名单。这条限制与四个开关是交集关系。
-22. **错过了就是错过了，开机补投一次是宿主的既定语义。** 用户设的 23:55 那天机器关着，第二天 12:42 开机时补投了一次——`schedule` 的文档原文是「After downtime, only the latest missed occurrence is delivered」，所以关多久都只补最近那一次，不会补一串。这不是插件的 bug，面板/README 不该暗示能补。
-
-18. **目标日无条件写，历史日只补空缺。** `missingDays()` 里 `day === options.target` 时永远返回 `mode:'append'`（哪怕当天已有页面——10:51 的投递只可能知道上午，晚上那一次必须能再写一篇），其它日子只在「有素材且一篇都没有」时返回 `mode:'fill'`。用户否掉了「改写同一篇」的方案：宁可多一篇，也不要覆盖别人写过的。补写开关只管历史那 7 天，关掉之后目标日照写。
+18. **目标日无条件写；写手不检测缺口。** 每一次投递只写它那一天，哪怕那天已有日记也照写**新的一篇**（用户否掉了「改写同一篇」：宁可多一篇，也不要覆盖别人写过的）。反过来，日记会话**不再扫最近 7 天、不再判断哪天缺日记**：`missingDays()` / `BACKFILL_DAYS` / 设置页的补写开关 / `diary_material` 的 `missing` 字段全部删除，`composeInstruction()` 里明写「不要自己去查哪些天缺日记——补写由人在面板里点」。这条是用户 2026-11-12 的第 3 条要求，别再加回来。
+19. **补写和重写都只由人发起。** 记忆页点开某天 → 选「日记」：那天没有日记时标题行给「补写」，有日记时给「重写这一天」（重写是再加一篇，不覆盖）。两者都走 `POST /backfill`，用 `mode: 'fill' | 'rewrite'` 区分，`day` 写死在那一次的一次性投递提示词里——定时任务的提示词是无日期的，跑它只能写出「今天」。
+20. **错过的投递只提醒，不自动补。** `GET /missed` 拿定时任务的 `lastDelivery`，把 `scheduledAt` 与 `deliveredAt` 各自按 04:00 日界折算成目标日：`got <= expected` 说明没跨日（凌晨那一投算准时），超过 30 天的不管，那天已经有页面的也不管（**自己消失**，没有已读状态）。面板在概览和记忆页顶部各渲染一条 `.dm-notice`，按钮按那一天发起补写。会话语义下的「对话记忆」页签不显示这条提醒——那里不写日记。
+21. **四个开关只有一个画法，而且必须门户出去。** `FlagsMenu` 一个组件服务三处：输入框右下角（`conversation.input.right`，order 30，当前会话）、会话页每行（那一行的会话）、设置页每个预设的两行（该预设的新会话 / 子代理默认值）。菜单用 `react-dom` 的 `createPortal` 挂到 `document.body`，因为输入框那一列会 `overflow: hidden`，宿主的弹层也是这么做的（`Menu` 原语里 `.portal{position:fixed;z-index:1100}`）。样式照抄 `dsh-client-ui-primitives/lib/Menu.module.css` 与 `MenuSurface.module.css` 的规则：`--dsw-menu-surface-fill` 底、`--dsw-menu-backdrop-filter` 模糊、`--dsw-elevation-prominent` 投影、`--dsw-radius-lg` 圆角、行 `min-height:30px` / `padding:5px 8px` / 悬停 `--dsw-alias-interactive-bg-hover`、图标 `--dsw-alias-menu-icon`。这些 token 不在 `Theme.listTokens` 的短名单里，要去样式表里找（`reference/_theme_client.js` 有全集）。`@deepseek-ai/dsh-client-ui-context-menu` 是右键菜单，不是点击弹出的下拉，别拿它做这个。
+22. **会话头那排单字胶囊与新建会话行那枚都撤了。** 用户的原话是「胶囊删掉，改成和新会话一样出现在对话框角落的菜单」：同一件事原来有三种长相（单字胶囊、hero 小胶囊、设置页四个 Toggle），现在是三种位置、一个组件。`conversation.hero.options` 那条注册整个移除——会话还不存在时四个开关没有可写的地方，这一段交给「按预设的默认权限」。
+23. **日记会话的工具是白名单，不是黑名单。** `DIARY_TOOLS` 八项 + `restrict({ allow })`。两个坑：`restrict` 只认**全局**工具名，scope-local 名会让整个过滤器失败，所以名单先和 `ctx.tools.definitions()` 的真实全局名取交集；`diary_write`/`diary_material` 挂在 agent 作用域上，按宿主规则「scoped registrations remain visible」本来就在，**不要**写进名单。这条限制与四个开关是交集关系。
+24. **错过了就是错过了，开机补投一次是宿主的既定语义。** 用户设的 23:55 那天机器关着，第二天 12:42 开机时补投了一次——`schedule` 的文档原文是「After downtime, only the latest missed occurrence is delivered」，所以关多久都只补最近那一次，不会补一串。这不是插件的 bug；面板的 `/missed` 提醒就是为这件事准备的。
 
 ---
 
@@ -136,7 +139,9 @@ test/                    六个 .test.mjs + smoke.cjs
 - [ ] 菜单和 DSH 自己的菜单摆在一起时配色/圆角/投影是否一致（亮暗两套都要看）
 - [ ] 设置页每个预设的两行菜单：改完之后那一行是否立刻显示新值、「恢复内置默认」/「跟随上面一行」是否只在有差值时可点
 - [ ] 定时任务真实投递一次、且日期是它自己算出来的
-- [ ] 「补写」按钮走 `/backfill` 后是否真能在 `diary` 表里落一行
+- [ ] 「补写」按钮走 `/backfill` 后是否真能在 `diary` 表里落一行；「重写这一天」是否**加**了一篇而不是改旧的那篇
+- [ ] 概览与记忆页顶部的「定时任务错过了某天」提醒是否出现、按钮是否只补那一天、那天有页面后是否自己消失
+- [ ] 真的错过一次定时任务之后，`/missed` 给出的日期是否就是错过的那个目标日（凌晨投递不应误报）
 - [ ] 设置页「每个预设的默认权限」在真实数据下列出的是哪些预设、改一行之后新开会话是否真的按它来
 - [ ] 设置页「写日记的人格」保存后，下一次投递的会话头里 `agentPreset` 是否是 `deepmemory-diary`、人格段是否真的换了
 - [ ] `deepmemory-diary` 出现在新建会话的预设选择器里是否合适（没有 bash 之类，只有文件读写）

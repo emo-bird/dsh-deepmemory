@@ -126,7 +126,8 @@ test('snapshot reports every layer', () => {
   assert.equal(snap.presets.standard.subagent.diary, false)
   assert.equal(snap.sessions.s1.recall, false)
   assert.deepEqual(Object.keys(snap.overrides).sort(), ['sessions', 'subagents'])
-  assert.equal(snap.backfill, true)
+  // The backfill switch is gone: nothing per-delivery decides gaps any more.
+  assert.equal('backfill' in snap, false)
 })
 
 test('file round-trips through disk', () => {
@@ -151,12 +152,17 @@ test('the diary persona and model round-trip', () => {
   assert.deepEqual(reread.diaryConfig(), { persona: '你是一个只写日记的人。', provider: 'deepseek', model: 'deepseek-chat' })
 })
 
-test('the backfill switch defaults on and persists', () => {
+test('the backfill switch is gone and a legacy file cannot bring it back', () => {
   const { path } = fresh()
   const settings = new MemorySettings(path)
-  assert.equal(settings.backfillEnabled(), true)
-  settings.setBackfill(false)
-  assert.equal(new MemorySettings(path).backfillEnabled(), false)
+  assert.equal('setBackfill' in settings, false)
+  assert.equal('backfillEnabled' in settings, false)
+  // A settings file written by the previous build carried the switch; it is
+  // ignored rather than honoured, because gaps are the panel's business now.
+  writeFileSync(path, JSON.stringify({ version: 2, presets: {}, sessions: {}, subagents: {}, backfill: false }), 'utf8')
+  const reread = new MemorySettings(path)
+  assert.equal('backfill' in reread.state, false)
+  assert.equal('backfill' in reread.snapshot(), false)
 })
 
 test('corrupt file falls back to defaults rather than throwing', () => {
