@@ -51,6 +51,10 @@
 
 预设那一层是**新会话的起点**：会话创建时读一次当时的值，钉成自己的，之后改预设不再影响任何已有会话——这一条是整个设计的关键，不然你调一个默认值就会把历史会话一起改掉。子代理是链上最后一层，没被单独改过时跟随父会话。
 
+四个开关之外，日记会话还有一条**白名单**：`syncAgentGating` 认出「工作目录是 `~/.dsh/deepmemory/diary`」的会话时，调 `tools.restrict({ allow })` 把它能看到的全局工具压到九项——`diary_read`、四个 `memory_*`、`read` / `write` / `edit`。`restrict` 只接受**全局**注册的工具名（scope-local 名会让整个过滤器失败），所以名单会先和 `ctx.tools.definitions()` 的真实全局名字取交集；`diary_write` / `diary_material` 是挂在 agent 作用域上的，按宿主规则「scoped registrations remain visible」本来就在，不用进名单。这条限制和四个开关是**交集**关系：开关关掉「写」，`memory_save` 仍然会消失。
+
+原来这一类会话能拿到 79 个工具（bash、浏览器、子代理、工作流、待办全在里面），一次日记投递只需要其中三个；现在剩下的都只是它真会用的。
+
 ## 工具
 
 普通会话能看到五个：
@@ -118,8 +122,8 @@
 「会话」页和其余几页同一套版式：两块 `.dm-panel`，一块「会话」、一块「子代理默认值」，都不再是表格。
 
 - 一行一个会话：标题、`sessionId`、preset、首句（两行截断）。**点这一行就打开这个会话的记忆**——和概览里点一条片段是同一个动作，所以原来那个「看片段」超链接没有了。
-- 四个开关折成右边一枚小胶囊 `n/4`，悬停能看到四项各自的开/关。**点这枚胶囊就是改这四项**：弹出一层菜单，四个开关各一行（读 / 写 / 日 / 删），点一下即生效，另有一行「恢复继承」（写的是 null 墓碑，不是删键）。原来那张四列复选框的矩阵在这个宽度上读不出来，而这个胶囊又必须能改——只显示数量、改不了的，等于把开关藏了起来。
-- 点行本身（不是胶囊）打开这个会话的记忆——和概览里点一条片段是同一个动作，所以原来那个「看片段」超链接没有了。**「清空本会话记忆」已经移除**：清空整段历史是破坏性动作，不该混在列表里的行内链接上；要删某条就走记忆页或搜索页的删除，逐条可控。
+- 四个开关折成右边一枚小按钮 `n/4`，悬停能看到四项各自的开/关。**点它就是改这四项**：弹出一层菜单，四个开关各一行（读 / 写 / 日 / 删），点一下即生效，另有一行「恢复继承」（写的是 null 墓碑，不是删键）。这枚菜单和对话输入框角落那枚、设置页每个预设下面那两枚是**同一个组件**，所以三处的字重、行高、配色、悬停底色完全一致——它照抄的是宿主 `Menu` 原语的规则（`--dsw-menu-surface-fill`、`--dsw-elevation-prominent`、`--dsw-alias-interactive-bg-hover`）。
+- 点行本身（不是那枚按钮）打开这个会话的记忆——和概览里点一条片段是同一个动作，所以原来那个「看片段」超链接没有了。**「清空本会话记忆」已经移除**：清空整段历史是破坏性动作，不该混在列表里的行内链接上；要删某条就走记忆页或搜索页的删除，逐条可控。
 
 **首句**优先取 `episodes` 里该会话最早的一条 user 记录（`ROW_NUMBER()` 取，不用 `MIN(created_at)` 自连接——同一毫秒的两条会因此挑错）；没有记录的旧会话回退到 `sessionProjectionCache` 的 `titleInput.first.text`，那是宿主用来生成标题的原始提问，所以老会话也有首句。会话清单来自 `sessionPersistence.list()`，标题走 `sessionProjectionCache.cachedSnapshot`（零 I/O），子代理会话被排除。
 
@@ -133,7 +137,7 @@
 
 ## 配色与主题
 
-面板和会话头的小开关都只引用 `--dsw-alias-*` token，不写死任何颜色，所以亮色和暗色都跟着走，不需要媒体查询。
+面板和输入框角落的小开关都只引用 `--dsw-alias-*` token，不写死任何颜色，所以亮色和暗色都跟着走，不需要媒体查询。
 
 **为什么不用 `prefers-color-scheme`**：主题包把亮色变量声明在 `body` 上，暗色声明在 `body[data-ds-dark-theme]` 上，主题是用户在设置里选的，跟系统无关。用媒体查询反而会和用户的选择打架。
 
@@ -162,44 +166,27 @@
 
 侧边栏那份只换颜色（`#F472B6` → `currentColor`），几何完全不动，两处露脸认得出是同一个东西。
 
-## 会话标题栏的四个小开关
+## 输入框角落的记忆开关
 
-`conversation.session.header.actions` 里注册了一个 `deepmemory-flags`，紧挨着会话标题：
+四个开关只有一个画法，也只有一个组件（`FlagsMenu`），三个地方都用它：
 
-```
-读  写  日  删
-```
+| 位置 | 槽位 | 改的是哪一层 |
+| --- | --- | --- |
+| 对话输入框右下角 | `conversation.input.right`（`order: 30`） | 当前会话（`scope: 'session'`） |
+| 「会话」页每行右侧 | 面板内部 | 那一行对应的会话 |
+| 「设置」页每个预设下面两行 | 面板内部 | 那个预设的「新会话」/「子代理」默认值 |
 
-单字胶囊，**实心 = 开，空心 = 关**，悬停有完整说明。点一下只改**当前会话**这一层（`scope: 'session'`），它所属预设的默认值不动。
+每处都只是「一枚小按钮 + 一层菜单」：
 
-实心态用的是 `button-primary-fill` + `label-primary-foreground` 这一对，所以亮色下是深底浅字、暗色下自动反过来，不会出现白字配白底。
+- 按钮是 24px 高的 `记` + `开着的数量/4`，和旁边模型、模式选择器同一行、同一个高度。
+- 菜单是**门户到 `document.body`** 的（`react-dom` 的 `createPortal`）：输入框那一列会裁剪溢出，宿主的弹层也是这么做的。位置按触发按钮的 `getBoundingClientRect()` 算，上方放不下就翻到下方，左右都夹在视口内，滚动和缩放时跟着走。
+- 菜单**照抄宿主 `Menu` 原语的规则**：`--dsw-menu-surface-fill` 底、`--dsw-menu-backdrop-filter` 模糊、`--dsw-elevation-prominent` 投影、`--dsw-radius-lg` 圆角、行高 20px / 内边距 5px 8px / 悬停 `--dsw-alias-interactive-bg-hover`。所以它和 DSH 自己的菜单是同一个观感，亮暗两套都成立（这里没有一处写死颜色）。
+- 四行菜单各带单字前缀（读 / 写 / 日 / 删），右边写「开 / 关」，开着的那行字和前缀转成 `state-success-primary`。最后一行是「恢复继承」：会话层写 null 墓碑，预设层则把上层的值原样写回去，于是差值归零、那一项从文件里消失。
+- 它和面板是**同一份数据、同一个路由**（`/session-flags`、`/settings`），改一边另一边立刻跟着变：两个组件都把加载函数注册进同一个 `flagWatchers` 集合，谁点完都广播一次。
 
-之所以做成单字：这个槽位「overflow is clipped and faded before the utilities」，长标签会被裁掉；`label` 属性对 list 项是显示文字，但会话头里没有足够宽度承载四个中文词。
+## 新建会话页
 
-会话头组件通过 `sessionId` prop 拿到当前会话 id，所以只注册一次就能服务所有对话。
-
-## 会话窗口里的「深度记忆」页签
-
-`conversation.view` 是宿主给「每个会话从哪几个视图里挑一个渲染」留的槽位：注册进去的每一项都是同一排页签里的一格，宿主把 owner props（`sessionId`、`openView` 等）发给每个条目。这里注册了一个 id 为 `deepmemory`、`order: 35` 的条目，标签是「深度记忆」；**用全新 id 而不是复用宿主已有的 id**——复用会顶掉那一格，而不是并排多出一个。
-
-页签的文字是宿主画的纯文本，塞不进图标（`ViewTabLabel` 只渲染 `<span class="tabLabel">{label}</span>`），所以那只水母画在这个视图自己的标题行里：`span.dm-title-icon` 包着同一个 `SidebarIcon`，`fill: currentColor`，跟着主题走。
-
-它渲染的就是「记忆」页那块板子（同一个 `MemoryBoard` 组件），只是固定带上当前会话的 `sessionId`，于是：
-
-- 日历只算这个会话的片段与事实；
-- 目录树只有**事实**和**片段**两项（一篇日记属于「哪一天」，不属于「哪一句话」，所以会话视图里不提供日记，也不提供补写）；
-- 右栏铺的就是这个会话在那一天的原文。
-
-数据全走已有的 `/calendar` 与 `/day` 两个接口的 `sessionId` 参数，没有为这个页签新增任何路由。
-
-## 新建会话页上的记忆开关
-
-`conversation.hero.options` 是宿主给「新建会话那一行右侧，工作区和预设之后」留的槽位（宿主原文：*Compact options right-aligned in the New Session row after the workspace and preset controls*）。这里注册了 `deepmemory-hero-flags`（`order: 20`），于是不用先去面板找设置：开新会话时就能决定这段对话要不要读写记忆。
-
-- 那一行高 28px，和模式、模型选择器挤在一起，所以这里只放一枚 24px 的小胶囊：`记` + `开着的数量/4`；点开才是四个开关（读记忆 / 写记忆 / 进日记 / 可删除），弹层朝上开，避免被输入框挡住。
-- 它和会话标题栏上那排小圆点是**同一份数据、同一个路由**（`/session-flags`），改一边另一边立刻跟着变：两者都把加载函数注册进同一个 `flagWatchers` 集合，谁点完都广播一次。
-- 宿主那一行没有自己的弹层机制，所以这里用 `rootRef` + `document` 的 `mousedown` 监听来收起弹层，卸载时移除。
-- `sessionId` 还没生成时组件返回 `null`，不占位。
+新建会话那一行**不再有记忆开关**（原 `conversation.hero.options` 的 `deepmemory-hero-flags` 已移除）。会话还不存在时，四个开关没有可写的地方；现在这一段由「设置」页的**按预设默认值**负责：选哪个预设，新会话就带着那一行的默认值出生，诞生之后再改预设不影响它。
 
 ## 日记定时任务
 
@@ -216,7 +203,7 @@
 日记会话不再落在 `standard` 上。插件在激活时自己注册一个预设 `deepmemory-diary`（`agentPresets.register(...)`，名字「深度记忆 · 写日记」，`order: 90`），定时任务与补写的 `target.create.agentPreset` 都指向它。
 
 - **人格是它自己的**：预设里挂 `@deepseek-ai/dsh-persona`，`prefix` 来自设置页那段话（留空用 `DEFAULT_DIARY_PERSONA`）。你的普通会话是什么人格完全不受影响，反过来也一样——人设是预设里的一个字段，不是进程级开关。`complete` 保持 `false`：那样只会替换部署身份，通用工具说明和**运行时时钟**仍然渲染，而日记要靠时钟算日期。
-- **工具只留需要的**：预设里只有 persona、`@deepseek-ai/dsh-time-context`（时钟）和 `@deepseek-ai/dsh-tool-fs`（文件读写）。记忆与日记工具（`diary_read` / `diary_material` / `diary_write` / `memory_*`）来自本插件在 Host 层注册的工具，**不需要也不应该在预设里声明**——预设只决定这个 agent 额外挂什么，宿主级工具对所有 agent 都可见。这样一来日记会话不再背着一整套 74 个工具的 schema（约 30k token），只留它真正会用的那几个。
+- **工具只留需要的**：预设里只有 persona、`@deepseek-ai/dsh-time-context`（时钟）和 `@deepseek-ai/dsh-tool-fs`（文件读写）。记忆与日记工具（`diary_read` / `diary_material` / `diary_write` / `memory_*`）来自本插件在 Host 层注册的工具，**不需要也不应该在预设里声明**——预设只决定这个 agent 额外挂什么，宿主级工具对所有 agent 都可见。另外插件还会给这类会话加一条 `restrict({ allow })` 白名单（见上面「门控」那节），把全局工具压到九项，于是它不再背着一整套 79 个工具的 schema，只留它真正会用的那几个。
 - **模型可以单独指定**：设置页填 `provider` / `model`，插件在 `agent/created` 时对落在该预设下的会话调 `agent.model.select(...)`；留空就不动，跟着 DSH 的全局默认模型。
 - **改人格立刻生效**：`POST /settings { scope: 'diary' }` 先落盘，再 `remountDiaryPreset()`——先 dispose 旧注册再 `register`，所以不会越改越多。注意 DSH 的规则是「已有的会话保留它启动时的预设版本」，所以改完的生效范围是**下一次投递**，正在跑的日记会话不会中途换人格。
 - 这个预设出现在新建会话的预设选择器里（它就是一个正常注册的预设），所以你也可以直接开一个会话用它——里面没有 bash 之类的工具，就是一个只会读写文件、带着记忆的对话。

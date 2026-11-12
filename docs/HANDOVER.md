@@ -23,7 +23,7 @@
 
 ```
 lib/index.js      69 KB  插件主入口：注册工具、注入提示词、17 条路由、门控、注册写日记预设
-lib/client.js    130 KB  浏览器半：侧边栏图标 + 主面板（五个页签）+ 会话头胶囊 + 会话窗口「深度记忆」页签 + 新建会话行记忆开关
+lib/client.js    132 KB  浏览器半：侧边栏图标 + 主面板（五个页签）+ 输入框角落的记忆开关菜单 + 会话窗口「深度记忆」页签
 lib/store.js      26 KB  sqlite 封装：facts / episodes / diary / meta / vec + 三张 FTS + schema 迁移
 lib/search.js     14 KB  三档检索
 lib/settings.js   12 KB  门控设置（预设 / 预设子代理 / 会话 / 子代理 四层）+ 日记人格与模型 + 补写开关
@@ -65,11 +65,12 @@ test/                    六个 .test.mjs + smoke.cjs
 | 17 条路由 | `/stats` `/facts` `/episodes` `/diary` `/day` `/calendar` `/activity` `/search` `/settings` `/forget` `/session-flags` `/rebuild` `/sessions` `/dependency` `/models` `/diary-task` `/backfill` |
 | 面板 | 五个页签：概览 / 搜索 / 记忆 / 会话 / 设置。所有列表都是**新的在上**（片段、事实、日记页）；设置页按**预设**配默认权限，另有一张「写日记的人格」卡片 |
 | 会话窗口 | 新增「深度记忆」页签（`conversation.view` 槽位，id `deepmemory`，order 35）。宿主只把标签渲染成纯文本，所以水母图标放在这个视图自己的标题行里 |
-| 新建会话页 | 记忆开关（`conversation.hero.options` 槽位，id `deepmemory-hero-flags`，order 20）。与会话头那排小圆点同一份数据、同一个 `/session-flags` 路由 |
+| 输入框角落 | 四个记忆开关（`conversation.input.right` 槽位，id `deepmemory-flags`，order 30）。**唯一画法**：`FlagsMenu` 组件，`react-dom` 门户到 body，配色照抄宿主 `Menu` 原语。会话页每行、设置页每个预设的两行用的都是它。原会话头胶囊与 `conversation.hero.options` 那枚都已移除 |
 | 语义第三档 | **可用**。依赖已装（542.8 MB），模型已下（bge-small-zh + bge-base-zh），当前用 `Xenova/bge-base-zh-v1.5` |
-| 日记定时任务 | 每天 23:40（`Asia/Shanghai`），target `{kind:'new', cwd: <…>/diary, agentPreset:'deepmemory-diary'}`；提示词里**不含日期** |
+| 日记定时任务 | 每天 23:55（`Asia/Shanghai`，用户自己改过），target `{kind:'new', cwd: <…>/diary, agentPreset:'deepmemory-diary'}`；提示词里**不含日期**；错过的那一次开机后补投一次 |
 | 补写 | 写日记时顺带扫最近 7 天（可关，关掉仍写目标日）；面板记忆页每天也能单独「补写」。`diary_material` 的 `missing` 每条带 `mode: append|fill` |
 | 测试 | 六个套件全绿：store 10 / search 13 / settings 16 / diary 18 / toolkit 9 / scheduler 18 = 84 |
+| 日记会话工具 | `restrict({ allow })` 白名单九项（`diary_read` + 四个 `memory_*` + `read`/`write`/`edit`），从 79 个压到九个；名单先与 `ctx.tools.definitions()` 的真实全局名取交集 |
 
 **门控四维与四层**
 
@@ -97,11 +98,16 @@ test/                    六个 .test.mjs + smoke.cjs
 11. **概览的活跃度是一面贡献墙，不是柱图。** 用户点名要 GitHub 主页那种贡献墙。实现是自己写的十来个 CSS 类（11px 一格、一周一列、周一起头），没有引入任何开源项目——只是照那个排法自己画。档位边界取当天数据的 25/50/75 分位，所以安静的日子也看得出层次；格子上的 `missing` 与日历缺口是同一个判断。`/activity` 一次要一年，所以走 `store.activityBetween()` 的三次分组查询，不是 365 × 3 次日查询。
 12. **概览三栏共用一种行，不再各写一套。** 早先左边日记预览是一段裁切的正文 + 整卡点击，右边事实/片段是带 meta、截断、高亮的行——同一份数据两套语法。现在统一成 `MemoryRow`（类别 + 时间 + 两行截断 + 命中词高亮），日记也从「最近一日」改成「最近 4 篇」。用户明确否掉了「展开全文」和「去看这一天」两个按钮：对齐靠 `clamp-2` 两行截断，跳转靠点这一行。贡献墙的悬停说明同理换成自绘的 `.dm-wall-tip`（定位在格子上方），因为浏览器原生 `title` 要等将近一秒、且只有一行，而一格代表一整天。
 13. **会话语义只加槽位，不改宿主。** 页签标签是纯文本，所以图标进不去标签，就放进视图标题行；新建会话的开关用官方 `conversation.hero.options` 槽位，而不是去改宿主那一行。
-14. **「会话」页跟其余几页同一套版式，且不再有整段清空。** 原来是两张表 + 四列复选框 + 行内三个链接（看片段 / 恢复继承 / 清空本会话记忆）。现在是一行一个会话、点行即打开这个会话的记忆（和点一条片段同一个动作，所以「看片段」消失了），四个开关折成 `n/4` 一枚胶囊，**点它就是改这四项**（弹出四行开关 + 恢复继承）——只显示数量、改不了的胶囊等于把开关藏起来。**「清空本会话记忆」整条移除**：清空一段历史是破坏性动作，不该挂在列表行上；面板只保留逐条删除，模型侧 `memory_forget` 的 session 分支仍受 `forget` 开关门控。
+14. **「会话」页跟其余几页同一套版式，且不再有整段清空。** 原来是两张表 + 四列复选框 + 行内三个链接（看片段 / 恢复继承 / 清空本会话记忆）。现在是一行一个会话、点行即打开这个会话的记忆（和点一条片段同一个动作，所以「看片段」消失了），四个开关收在右侧一枚 `n/4` 按钮里，**点它就是改这四项**（四行开关 + 恢复继承）。**「清空本会话记忆」整条移除**：清空一段历史是破坏性动作，不该挂在列表行上；面板只保留逐条删除，模型侧 `memory_forget` 的 session 分支仍受 `forget` 开关门控。
 
 15. **写日记有自己的预设，人设与模型在面板里改。** `deepmemory-diary` 由插件在激活时 `agentPresets.register(...)` 注册（不是一个额外的 bundle，因为人设是运行时可改的，而 bundle patch 是静态的），`order: 90`，plugins 只留三样：`@deepseek-ai/dsh-persona`（`prefix` 取自设置页，留空用内置人设）、`@deepseek-ai/dsh-time-context`（时钟——日记靠它算日期）、`@deepseek-ai/dsh-tool-fs`（文件读写）。`complete` 必须保持 `false`，否则 prefix 会成为唯一系统提示，时钟一起没了。**记忆与日记工具不在预设里声明**：它们是本插件在 Host 层注册的，对所有 agent 可见；预设只决定额外挂什么。这才是「日记会话只背几个工具」的实现方式——普通会话仍是 74 个。模型独立：`agent/created` 时如果设置页填了 provider + model，就对落在该预设下的会话调 `agent.model.select(...)`，留空跟随 DSH 全局默认模型。
 16. **改人设立刻生效，但只对下一次投递生效。** `POST /settings { scope:'diary' }` = 落盘 + `remountDiaryPreset()`（先 dispose 再 register，不会越改越多）。DSH 的规则是「已有会话保留启动时的预设版本」，所以在跑的日记会话不会中途换人格，下一次投递才是新的。设置页要说明这一点，不然用户会以为没生效。
 17. **所有列表新的在上。** 片段、事实、日记页的查询一律 `ORDER BY created_at DESC, rowid DESC`（`lib/store.js` 里的 `episodesOfDay` / `pagesOfDay` / `listDiary` / `listFactsBetween`）。唯一例外是 `dayDigest()`：它要吃「这一天」的叙事，所以内部 `.reverse()` 回正序再 `.slice(-MAX_EPISODES)` 保留最近的 400 条。改排序时别把 digest 一起改回去。
+19. **四个开关只有一个画法，而且必须门户出去。** `FlagsMenu` 一个组件服务三处：输入框右下角（`conversation.input.right`，order 30，当前会话）、会话页每行（那一行的会话）、设置页每个预设的两行（该预设的新会话 / 子代理默认值）。菜单用 `react-dom` 的 `createPortal` 挂到 `document.body`，因为输入框那一列会 `overflow: hidden`，宿主的弹层也是这么做的（`Menu` 原语里 `.portal{position:fixed;z-index:1100}`）。样式照抄 `dsh-client-ui-primitives/lib/Menu.module.css` 与 `MenuSurface.module.css` 的规则：`--dsw-menu-surface-fill` 底、`--dsw-menu-backdrop-filter` 模糊、`--dsw-elevation-prominent` 投影、`--dsw-radius-lg` 圆角、行 `min-height:30px` / `padding:5px 8px` / 悬停 `--dsw-alias-interactive-bg-hover`、图标 `--dsw-alias-menu-icon`。这些 token 不在 `Theme.listTokens` 的短名单里，要去样式表里找（`reference/_theme_client.js` 有全集）。`@deepseek-ai/dsh-client-ui-context-menu` 是右键菜单，不是点击弹出的下拉，别拿它做这个。
+20. **会话头那排单字胶囊与新建会话行那枚都撤了。** 用户的原话是「胶囊删掉，改成和新会话一样出现在对话框角落的菜单」：同一件事原来有三种长相（单字胶囊、hero 小胶囊、设置页四个 Toggle），现在是三种位置、一个组件。`conversation.hero.options` 那条注册整个移除——会话还不存在时四个开关没有可写的地方，这一段交给「按预设的默认权限」。
+21. **日记会话的工具是白名单，不是黑名单。** `DIARY_TOOLS` 八项 + `restrict({ allow })`。两个坑：`restrict` 只认**全局**工具名，scope-local 名会让整个过滤器失败，所以名单先和 `ctx.tools.definitions()` 的真实全局名取交集；`diary_write`/`diary_material` 挂在 agent 作用域上，按宿主规则「scoped registrations remain visible」本来就在，**不要**写进名单。这条限制与四个开关是交集关系。
+22. **错过了就是错过了，开机补投一次是宿主的既定语义。** 用户设的 23:55 那天机器关着，第二天 12:42 开机时补投了一次——`schedule` 的文档原文是「After downtime, only the latest missed occurrence is delivered」，所以关多久都只补最近那一次，不会补一串。这不是插件的 bug，面板/README 不该暗示能补。
+
 18. **目标日无条件写，历史日只补空缺。** `missingDays()` 里 `day === options.target` 时永远返回 `mode:'append'`（哪怕当天已有页面——10:51 的投递只可能知道上午，晚上那一次必须能再写一篇），其它日子只在「有素材且一篇都没有」时返回 `mode:'fill'`。用户否掉了「改写同一篇」的方案：宁可多一篇，也不要覆盖别人写过的。补写开关只管历史那 7 天，关掉之后目标日照写。
 
 ---
@@ -124,14 +130,17 @@ test/                    六个 .test.mjs + smoke.cjs
 - [ ] 概览的日记/事实/片段三种行看起来是不是同一种东西、命中词高亮有没有出现
 - [ ] 贡献墙在亮色/暗色下分档是否看得清、格子里的缺口描边是否认得出、点格子是否落到那一天
 - [ ] 贡献墙的自绘悬停：跟着鼠标走得快不快、会不会被面板边界裁掉
-- [ ] 「会话」页改成列表后：点一行是否打开那个会话的记忆、`n/4` 胶囊点开后四项是否都能改、「恢复继承」是否只在有覆盖时出现
+- [ ] 「会话」页改成列表后：点一行是否打开那个会话的记忆、`n/4` 按钮点开后四项是否都能改、「恢复继承」是否只在有覆盖时出现
 - [ ] 会话窗口里「深度记忆」页签在真实布局里是否可用（组件能注册、能渲染，但没人在页面上点过）
-- [ ] 新建会话那一行的小胶囊位置对不对：会不会挤掉模式/模型选择器，弹层会不会被输入框盖住
+- [ ] 输入框右下角那枚 `记 n/4` 与模型、模式选择器并排时会不会挤、菜单朝上翻的时候有没有被输入框或窗口边缘裁掉（门户到 body，理论上不会，但要在真实布局里看）
+- [ ] 菜单和 DSH 自己的菜单摆在一起时配色/圆角/投影是否一致（亮暗两套都要看）
+- [ ] 设置页每个预设的两行菜单：改完之后那一行是否立刻显示新值、「恢复内置默认」/「跟随上面一行」是否只在有差值时可点
 - [ ] 定时任务真实投递一次、且日期是它自己算出来的
 - [ ] 「补写」按钮走 `/backfill` 后是否真能在 `diary` 表里落一行
 - [ ] 设置页「每个预设的默认权限」在真实数据下列出的是哪些预设、改一行之后新开会话是否真的按它来
 - [ ] 设置页「写日记的人格」保存后，下一次投递的会话头里 `agentPreset` 是否是 `deepmemory-diary`、人格段是否真的换了
 - [ ] `deepmemory-diary` 出现在新建会话的预设选择器里是否合适（没有 bash 之类，只有文件读写）
+- [ ] 下一次日记投递时，那个会话的工具清单是否真的从 79 降到九个（看会话里的工具调用列表，或日志里有没有 `deepmemory: could not narrow the diary tools` 这条 warn）
 
 ---
 
