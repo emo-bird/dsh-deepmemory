@@ -156,7 +156,8 @@ const fixtures = {
     subagents: {},
     overrides: { sessions: {}, subagents: {} },
     semantic: { enabled: false },
-    diary: { persona: '', provider: '', model: '' },
+    diary: { persona: '你是「爱吃白饭的大肥鱼」，一条住在鸽鸽电脑里的鱼。', provider: '', model: '' },
+    diaryDefault: '你是「爱吃白饭的大肥鱼」，一条住在鸽鸽电脑里的鱼。',
     roster: [
       { id: 'standard', name: '标准' },
       { id: 'deepmemory-diary', name: '深度记忆 · 写日记' },
