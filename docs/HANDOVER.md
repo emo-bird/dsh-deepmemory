@@ -22,8 +22,8 @@
 ## 2. 文件结构与职责
 
 ```
-lib/index.js      77 KB  插件主入口：注册工具、注入提示词、18 条路由、门控、注册写日记预设、素材带标题与项目
-lib/client.js    132 KB  浏览器半：侧边栏图标 + 主面板（五个页签）+ 输入框角落的记忆开关菜单 + 会话窗口「深度记忆」页签
+lib/index.js      79 KB  插件主入口：注册工具、注入提示词、19 条路由、门控、注册写日记预设、素材带标题与项目、模型目录
+lib/client.js    137 KB  浏览器半：侧边栏图标 + 主面板（五个页签）+ 输入框角落的记忆开关菜单 + 会话窗口「深度记忆」页签
 lib/store.js      26 KB  sqlite 封装：facts / episodes / diary / meta / vec + 三张 FTS + schema 迁移
 lib/search.js     14 KB  三档检索
 lib/settings.js   11 KB  门控设置（预设 / 预设子代理 / 会话 / 子代理 四层）+ 日记人格与模型
@@ -62,8 +62,9 @@ test/                    六个 .test.mjs + smoke.cjs（真的迷你渲染器）
 | git | 见 `git log -1`；`docs/` 在 2026-11-11 由根目录 `HANDOVER.md` 迁入 |
 | 安装 | **已安装并激活**，desktop profile 里是 `link:C:/Project/dsh-deepmemory` 的 junction，改代码刷新页面即生效 |
 | 工具 | 根作用域：`memory_search` / `memory_recall` / `memory_save` / `diary_read` / `memory_forget`；`diary_write` + `diary_material` 只在日记目录的 agent 上注册。插件自己注册预设 `deepmemory-diary` |
-| 18 条路由 | `/stats` `/facts` `/episodes` `/diary` `/day` `/calendar` `/activity` `/search` `/settings` `/forget` `/session-flags` `/rebuild` `/sessions` `/dependency` `/models` `/diary-task` `/backfill` `/missed` |
+| 19 条路由 | `/stats` `/facts` `/episodes` `/diary` `/day` `/calendar` `/activity` `/search` `/settings` `/forget` `/session-flags` `/rebuild` `/sessions` `/dependency` `/models` `/model-catalog` `/diary-task` `/backfill` `/missed` |
 | 面板 | 五个页签：概览 / 搜索 / 记忆 / 会话 / 设置。所有列表都是**新的在上**（片段、事实、日记页）；设置页按**预设**配默认权限（一个预设一张卡片，横排自动折行），另有一张「写日记的人格」卡片 |
+| 日记模型下拉 | 「写日记的人格」里的模型是一个原生 `<select>`：选项来自 `GET /model-catalog`（宿主 `llm.listProviders()` + 逐个 `listModels()`，`default` 取 `agentDefaultModel`），按 provider 分 `<optgroup>`，第一项是「跟随全局默认（provider / model）」；值编码 `provider\tmodel`；宿主不再广告的旧值会保留成「（列表里没有）」一项，catalog 读不到时退回两个手填输入框 |
 | 日记素材带项目 | 片段落库时记下会话 cwd（`episodes.workspace`）；取素材时再由 `sessionLabels()` 从 `sessionPersistence` + `sessionProjectionCache` 补上会话**标题**与首句，于是每段对话变成 `## 标题（项目 X · 预设 Y）` + `开头：…`。写日记的人格默认是「爱吃白饭的大肥鱼」 |
 | 会话窗口 | 新增「深度记忆」页签（`conversation.view` 槽位，id `deepmemory`，order 35）。宿主只把标签渲染成纯文本，所以水母图标放在这个视图自己的标题行里 |
 | 输入框角落 | 四个记忆开关（`conversation.input.right` 槽位，id `deepmemory-flags`，order 30）。**唯一画法**：`FlagsMenu` 组件，`react-dom` 门户到 body，配色照抄宿主 `Menu` 原语。会话页每行、设置页每个预设的两行用的都是它。原会话头胶囊与 `conversation.hero.options` 那枚都已移除 |
@@ -115,6 +116,7 @@ test/                    六个 .test.mjs + smoke.cjs（真的迷你渲染器）
 24. **错过了就是错过了，开机补投一次是宿主的既定语义。** 用户设的 23:55 那天机器关着，第二天 12:42 开机时补投了一次——`schedule` 的文档原文是「After downtime, only the latest missed delivery occurrence is delivered」，所以关多久都只补最近那一次，不会补一串。这不是插件的 bug；面板的 `/missed` 提醒就是为这件事准备的。
 25. **日记要知道「在做哪个项目」，而项目来自 cwd，不是来自标题。** 用户的抱怨是「事情都记着，但什么项目却不知道」。根因是 `episodes.workspace` 一直是空字符串（`record()` 没传），而 `renderDigest` 把每段对话一律印成 `## 一段对话`。修法分两步：落库时写 `workspace: sessionCwd(session)`；取素材时用 `dayDigest` 新增的 `describe` 回调把宿主里的会话标题与首句补进来（`sessionLabels()`，走 `sessionProjectionCache`，零 I/O）。因此**不要**指望「打开标题刷新插件」来修这件事——它只是让标题更准；项目名与标题插件无关。
 26. **默认人设写成跑得动的一段话，不是形容词。** 「爱吃白饭的大肥鱼」沿用 `dsh-companion-preset`（小肥鱼）的语气规则：简体中文、像人说话、不列条目/小标题/整段加粗、可以自嘲和少量颜文字、不总结不复述、不编造。区别是它写的是「他」的一天而不是聊天回话。人设放在 `DEFAULT_DIARY_PERSONA`，设置页留空就用它——所以改它等于改所有留空的人。
+27. **模型是下拉框，数据来自宿主的 `llm` 服务，不是手填。** 新增 `GET /model-catalog`：`listProviders()`（空则退回 `listConfigurableProviders()`）→ 逐个 `await listModels(id)` → `{providers:[{id,name,models:[…]}], default}`，`default` 取 `agentDefaultModel.currentSelection()`。客户端把它渲染成一个原生 `<select>` + 每 provider 一个 `<optgroup>`，值编码成 `provider\tmodel`（`modelPick` / `splitModelPick` / `modelOptions` 三个函数是唯一知道这个编码的地方），空串表示「跟随全局默认」。照 `dsh-pet` 的做法走**自建 host 路由**而不是 `connection` 远程调用，但**不用**它那套带搜索的自绘弹层——原生 `select` 键盘可达、没有定位算错的可能。两个细节：保存过但宿主不再广告的一对要留一项「（列表里没有）」，否则 `<select>` 会静默跳到第一项、下一次保存就把模型改了；catalog 读不到时退回两个手填输入框并说明原因，别让人卡在一个空下拉框前。
 
 ---
 
@@ -147,6 +149,8 @@ test/                    六个 .test.mjs + smoke.cjs（真的迷你渲染器）
 - [ ] 真的错过一次定时任务之后，`/missed` 给出的日期是否就是错过的那个目标日（凌晨投递不应误报）
 - [ ] 设置页「每个预设的默认权限」在真实数据下列出的是哪些预设、改一行之后新开会话是否真的按它来
 - [ ] 预设卡片横排之后：宽窗口下一屏能放下几个、窄窗口折行是否正常、卡片之间高度是否因为预设名长短而不齐
+- [ ] 模型下拉框里列出的是不是这台机器上真的能用的那些路由、选一个之后下一次投递是否真的换了模型、选回「跟随全局默认」是否真的回到全局那个
+- [ ] 下拉框展开时被 `<optgroup>` 分组的样子（原生 `select`，各平台观感不同，但没有自绘的成本）
 - [ ] 下一次日记的素材里是否真的出现 `## 标题（项目 X · 预设 Y）` 和 `开头：…`（`episodes.workspace` 从本次改动之后的行才开始有值，旧行仍是空）
 - [ ] 「爱吃白饭的大肥鱼」写出来的东西是不是用户想要的味道（语气、具体度、有没有编造）
 - [ ] 设置页「写日记的人格」保存后，下一次投递的会话头里 `agentPreset` 是否是 `deepmemory-diary`、人格段是否真的换了

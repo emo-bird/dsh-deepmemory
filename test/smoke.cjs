@@ -198,6 +198,13 @@ const fixtures = {
   '/api/deepmemory/diary-task': { scheduled: true, status: 'active', time: '23:55', zone: 'Asia/Shanghai', nextAt: null },
   '/api/deepmemory/dependency': { state: 'ready', installed: true },
   '/api/deepmemory/models': { items: [], state: 'idle' },
+  '/api/deepmemory/model-catalog': {
+    providers: [
+      { id: 'deepseek', name: 'DeepSeek', models: [{ id: 'deepseek-v4-flash', name: 'V4 Flash' }] },
+      { id: 'openai', name: 'OpenAI', models: [{ id: 'gpt-5-mini', name: 'GPT-5 mini' }] },
+    ],
+    default: { provider: 'deepseek', model: 'deepseek-v4-flash' },
+  },
   '/api/deepmemory/search': { hits: [], tiers: {} },
 }
 

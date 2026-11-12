@@ -143,7 +143,9 @@
 
 **权限不再有「全局默认」那一栏**。每个预设（`standard`、`minimal`、以及插件自己注册的 `deepmemory-diary`……）各有一组「新会话」和「子代理」的读写日删默认值：会话创建时读一次就归自己所有，之后改预设只影响将来的会话；子代理先跟父会话，父会话没有覆盖时才看预设里那一行。落在 `settings.json` 里的永远只是「和上一层不同的那些键」，所以「继承」是文件的自然状态，一调回默认那一行就整个消失。一个预设一块，横排成卡片（`repeat(auto-fit, minmax(176px, 1fr))`），窄了就自动折行——早先是竖着一条条铺，装上几个预设就把设置页顶下去了。
 
-**写日记的人格**也只影响日记：那段话写进 `deepmemory-diary` 这个预设的 persona，配上一个模型选择（留空就用 DSH 的全局默认模型，两个都填才切）。改完立刻重挂预设，下一次投递就按新的人格写。留空时用的是内置的那位——**爱吃白饭的大肥鱼**：一条住在电脑里的鱼，白天藏在显示器后面看人敲键盘，晚上替他把这一天记下来；第一人称「我」，写的是「他」；平实、慢、具体，不列条目、不整段加粗、不用「今天真是充实的一天」收尾，可以自嘲可以有一点颜文字但别每句都撒；抓具体的事（改了什么、卡在哪里、几点才想起来吃饭），不写「处理了一些事情」；可以带情绪和判断，但不编造素材里没有的事，记不清就写记不清。语气是从 `dsh-companion-preset`（小肥鱼）那套规则里收过来的，只是把「聊天」换成了「记事」。
+**写日记的人格**也只影响日记：那段话写进 `deepmemory-diary` 这个预设的 persona，配上一个模型选择（默认「跟随全局默认模型」，选了具体模型才切）。改完立刻重挂预设，下一次投递就按新的人格写。留空时用的是内置的那位——**爱吃白饭的大肥鱼**：一条住在电脑里的鱼，白天藏在显示器后面看人敲键盘，晚上替他把这一天记下来；第一人称「我」，写的是「他」；平实、慢、具体，不列条目、不整段加粗、不用「今天真是充实的一天」收尾，可以自嘲可以有一点颜文字但别每句都撒；抓具体的事（改了什么、卡在哪里、几点才想起来吃饭），不写「处理了一些事情」；可以带情绪和判断，但不编造素材里没有的事，记不清就写记不清。语气是从 `dsh-companion-preset`（小肥鱼）那套规则里收过来的，只是把「聊天」换成了「记事」。
+
+**模型是从下拉框里选的，不是手打的**。那个下拉框的数据来自宿主自己的 `llm` 服务：面板读 `GET /api/deepmemory/model-catalog`，插件在宿主里调 `listProviders()`（没有可用路由时退回 `listConfigurableProviders()`），再对每个 provider `await listModels(id)`，拼成 `{providers:[{id,name,models:[{id,name}]}], default:{provider,model}|null}` 返回；`default` 是 `agentDefaultModel.currentSelection()` 报的全局默认，也就是下拉框第一项「跟随全局默认（provider / model）」显示的东西。选项按 provider 分 `<optgroup>`，一个 provider 一个组。这样做是为了不让人去背 provider id 和模型 id——手填一个拼错的 id 不会报错，只会在投递时静默回退。已经保存、但宿主现在不再广告的一对仍然会留成一项「（列表里没有）provider / model」，否则 `<select>` 会悄悄跳到第一项，下一次保存就把模型改了。宿主一个模型路由都没有、或者这条路由读不到（比如插件跑在没有 `llm` 服务的环境里）时，面板退回两个手填输入框，并说明原因。
 
 删除的入口都在「记忆」页右栏：每条事实、每条片段、每一篇日记右边都有「删除」。搜索页的结果也能直接删。这些都不需要开会话的「删」开关，只有模型侧「清空某个会话的全部片段」受它约束——那是唯一影响一片历史的动作。日记与片段删除前会弹一次确认。
 
@@ -216,7 +218,7 @@
 
 - **人格是它自己的**：预设里挂 `@deepseek-ai/dsh-persona`，`prefix` 来自设置页那段话（留空用 `DEFAULT_DIARY_PERSONA`，也就是那位「爱吃白饭的大肥鱼」）。你的普通会话是什么人格完全不受影响，反过来也一样——人设是预设里的一个字段，不是进程级开关。`complete` 保持 `false`：那样只会替换部署身份，通用工具说明和**运行时时钟**仍然渲染，而日记要靠时钟算日期。
 - **工具只留需要的**：预设里只有 persona、`@deepseek-ai/dsh-time-context`（时钟）和 `@deepseek-ai/dsh-tool-fs`（文件读写）。记忆与日记工具（`diary_read` / `diary_material` / `diary_write` / `memory_*`）来自本插件在 Host 层注册的工具，**不需要也不应该在预设里声明**——预设只决定这个 agent 额外挂什么，宿主级工具对所有 agent 都可见。另外插件还会给这类会话加一条 `restrict({ allow })` 白名单（见上面「门控」那节），把全局工具压到九项，于是它不再背着一整套 79 个工具的 schema，只留它真正会用的那几个。
-- **模型可以单独指定**：设置页填 `provider` / `model`，插件在 `agent/created` 时对落在该预设下的会话调 `agent.model.select(...)`；留空就不动，跟着 DSH 的全局默认模型。
+- **模型可以单独指定**：设置页的模型下拉框选一个 `provider / model`（数据来自宿主 `llm` 服务的 `listProviders()` + `listModels()`），插件在 `agent/created` 时对落在该预设下的会话调 `agent.model.select(...)`；选「跟随全局默认模型」就不动。
 - **改人格立刻生效**：`POST /settings { scope: 'diary' }` 先落盘，再 `remountDiaryPreset()`——先 dispose 旧注册再 `register`，所以不会越改越多。注意 DSH 的规则是「已有的会话保留它启动时的预设版本」，所以改完的生效范围是**下一次投递**，正在跑的日记会话不会中途换人格。
 - 这个预设出现在新建会话的预设选择器里（它就是一个正常注册的预设），所以你也可以直接开一个会话用它——里面没有 bash 之类的工具，就是一个只会读写文件、带着记忆的对话。
 
@@ -238,6 +240,7 @@ GET  /api/deepmemory/sessions
 GET  /api/deepmemory/session-flags?sessionId=…
 GET  /api/deepmemory/dependency
 GET  /api/deepmemory/models
+GET  /api/deepmemory/model-catalog
 GET  /api/deepmemory/diary-task
 POST /api/deepmemory/settings       { scope: preset|preset-subagent|session|subagent|semantic|diary|clear-session, id, flags, diary }
 POST /api/deepmemory/session-flags  { sessionId, scope?: 'subagent', flags | clear: true }
