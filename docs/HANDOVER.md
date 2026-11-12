@@ -22,13 +22,13 @@
 ## 2. 文件结构与职责
 
 ```
-lib/index.js      69 KB  插件主入口：注册工具、注入提示词、17 条路由、门控、注册写日记预设
+lib/index.js      77 KB  插件主入口：注册工具、注入提示词、18 条路由、门控、注册写日记预设、素材带标题与项目
 lib/client.js    132 KB  浏览器半：侧边栏图标 + 主面板（五个页签）+ 输入框角落的记忆开关菜单 + 会话窗口「深度记忆」页签
 lib/store.js      26 KB  sqlite 封装：facts / episodes / diary / meta / vec + 三张 FTS + schema 迁移
 lib/search.js     14 KB  三档检索
-lib/settings.js   12 KB  门控设置（预设 / 预设子代理 / 会话 / 子代理 四层）+ 日记人格与模型
-lib/diary.js       9 KB  日记素材组装、日界与提示词
-lib/scheduler.js   8 KB  日记定时任务（借助宿主 schedule 服务）+ 立刻运行 + 一次性投递
+lib/settings.js   11 KB  门控设置（预设 / 预设子代理 / 会话 / 子代理 四层）+ 日记人格与模型
+lib/diary.js      11 KB  日记素材组装（含项目名/标题/首句）、日界、提示词、默认人设
+lib/scheduler.js  10 KB  日记定时任务（借助宿主 schedule 服务）+ 立刻运行 + 一次性投递
 lib/embed.js      16 KB  ONNX 嵌入：下载、加载、模型管理
 lib/install.js     9 KB  npm 依赖安装（进 vendor/）
 lib/toolkit.js     5 KB  本地 defineTool 实现（**不能 import @deepseek-ai/dsh-tools**，见第 6 节）
@@ -40,7 +40,7 @@ docs/1.xml               面板布局原始规格（用户给的，改动前先�
 reference/               asar 抽取件，被 .gitignore 排除，仅 README.md 入库
 vendor/                  542.8 MB，被 .gitignore 排除
 local/                   用户私有目录，被 .gitignore 排除
-test/                    六个 .test.mjs + smoke.cjs
+test/                    六个 .test.mjs + smoke.cjs（真的迷你渲染器）
 ```
 
 **核心数据模型**
@@ -63,7 +63,8 @@ test/                    六个 .test.mjs + smoke.cjs
 | 安装 | **已安装并激活**，desktop profile 里是 `link:C:/Project/dsh-deepmemory` 的 junction，改代码刷新页面即生效 |
 | 工具 | 根作用域：`memory_search` / `memory_recall` / `memory_save` / `diary_read` / `memory_forget`；`diary_write` + `diary_material` 只在日记目录的 agent 上注册。插件自己注册预设 `deepmemory-diary` |
 | 18 条路由 | `/stats` `/facts` `/episodes` `/diary` `/day` `/calendar` `/activity` `/search` `/settings` `/forget` `/session-flags` `/rebuild` `/sessions` `/dependency` `/models` `/diary-task` `/backfill` `/missed` |
-| 面板 | 五个页签：概览 / 搜索 / 记忆 / 会话 / 设置。所有列表都是**新的在上**（片段、事实、日记页）；设置页按**预设**配默认权限，另有一张「写日记的人格」卡片 |
+| 面板 | 五个页签：概览 / 搜索 / 记忆 / 会话 / 设置。所有列表都是**新的在上**（片段、事实、日记页）；设置页按**预设**配默认权限（一个预设一张卡片，横排自动折行），另有一张「写日记的人格」卡片 |
+| 日记素材带项目 | 片段落库时记下会话 cwd（`episodes.workspace`）；取素材时再由 `sessionLabels()` 从 `sessionPersistence` + `sessionProjectionCache` 补上会话**标题**与首句，于是每段对话变成 `## 标题（项目 X · 预设 Y）` + `开头：…`。写日记的人格默认是「爱吃白饭的大肥鱼」 |
 | 会话窗口 | 新增「深度记忆」页签（`conversation.view` 槽位，id `deepmemory`，order 35）。宿主只把标签渲染成纯文本，所以水母图标放在这个视图自己的标题行里 |
 | 输入框角落 | 四个记忆开关（`conversation.input.right` 槽位，id `deepmemory-flags`，order 30）。**唯一画法**：`FlagsMenu` 组件，`react-dom` 门户到 body，配色照抄宿主 `Menu` 原语。会话页每行、设置页每个预设的两行用的都是它。原会话头胶囊与 `conversation.hero.options` 那枚都已移除 |
 | 语义第三档 | **可用**。依赖已装（542.8 MB），模型已下（bge-small-zh + bge-base-zh），当前用 `Xenova/bge-base-zh-v1.5` |
@@ -71,7 +72,7 @@ test/                    六个 .test.mjs + smoke.cjs
 | 补写 / 重写 | **只由人在面板里发起**。记忆页点开某天 → 选「日记」：没日记给「补写」，有日记给「重写这一天」（重写是再加一篇，不覆盖）。两者都走 `POST /backfill`，`mode` 区分；`day` 写死在那一次的一次性投递里 |
 | 错过的投递 | 不自动补。`GET /missed` 比较 `lastDelivery` 的 `scheduledAt` 与 `deliveredAt` 各自归属的目标日（按 04:00 日界），给出「定时任务错过了某天」；概览和记忆页顶部各一条提醒，按钮按那一天补写，那天有页面后提醒自己消失 |
 | 写手不检测缺口 | 日记会话只写要求它的那一天：`diary_material` 只返回一天；`missingDays()` / `BACKFILL_DAYS` / 补写开关 / `diary_material` 的 `missing` 字段**全部删除**（用户的第 3 条要求） |
-| 测试 | 六个套件全绿：store 10 / search 13 / settings 16 / diary 15 / toolkit 9 / scheduler 18 = 81；`test/smoke.cjs` 另渲染四个槽位（31 个节点） |
+| 测试 | 六个套件全绿：store 10 / search 13 / settings 16 / diary 18 / toolkit 9 / scheduler 18 = 84；`test/smoke.cjs` 是个真的迷你渲染器（桩 `react`/`react-dom`，逐 tab 深渲染并跑 effect），会断言每个页签的文字、检查 CSS 类与字面色，并打印未渲染到的交互态类名 |
 | 日记会话工具 | `restrict({ allow })` 白名单九项（`diary_read` + 四个 `memory_*` + `read`/`write`/`edit`），从 79 个压到九个；名单先与 `ctx.tools.definitions()` 的真实全局名取交集 |
 
 **门控四维与四层**
@@ -111,7 +112,9 @@ test/                    六个 .test.mjs + smoke.cjs
 21. **四个开关只有一个画法，而且必须门户出去。** `FlagsMenu` 一个组件服务三处：输入框右下角（`conversation.input.right`，order 30，当前会话）、会话页每行（那一行的会话）、设置页每个预设的两行（该预设的新会话 / 子代理默认值）。菜单用 `react-dom` 的 `createPortal` 挂到 `document.body`，因为输入框那一列会 `overflow: hidden`，宿主的弹层也是这么做的（`Menu` 原语里 `.portal{position:fixed;z-index:1100}`）。样式照抄 `dsh-client-ui-primitives/lib/Menu.module.css` 与 `MenuSurface.module.css` 的规则：`--dsw-menu-surface-fill` 底、`--dsw-menu-backdrop-filter` 模糊、`--dsw-elevation-prominent` 投影、`--dsw-radius-lg` 圆角、行 `min-height:30px` / `padding:5px 8px` / 悬停 `--dsw-alias-interactive-bg-hover`、图标 `--dsw-alias-menu-icon`。这些 token 不在 `Theme.listTokens` 的短名单里，要去样式表里找（`reference/_theme_client.js` 有全集）。`@deepseek-ai/dsh-client-ui-context-menu` 是右键菜单，不是点击弹出的下拉，别拿它做这个。
 22. **会话头那排单字胶囊与新建会话行那枚都撤了。** 用户的原话是「胶囊删掉，改成和新会话一样出现在对话框角落的菜单」：同一件事原来有三种长相（单字胶囊、hero 小胶囊、设置页四个 Toggle），现在是三种位置、一个组件。`conversation.hero.options` 那条注册整个移除——会话还不存在时四个开关没有可写的地方，这一段交给「按预设的默认权限」。
 23. **日记会话的工具是白名单，不是黑名单。** `DIARY_TOOLS` 八项 + `restrict({ allow })`。两个坑：`restrict` 只认**全局**工具名，scope-local 名会让整个过滤器失败，所以名单先和 `ctx.tools.definitions()` 的真实全局名取交集；`diary_write`/`diary_material` 挂在 agent 作用域上，按宿主规则「scoped registrations remain visible」本来就在，**不要**写进名单。这条限制与四个开关是交集关系。
-24. **错过了就是错过了，开机补投一次是宿主的既定语义。** 用户设的 23:55 那天机器关着，第二天 12:42 开机时补投了一次——`schedule` 的文档原文是「After downtime, only the latest missed occurrence is delivered」，所以关多久都只补最近那一次，不会补一串。这不是插件的 bug；面板的 `/missed` 提醒就是为这件事准备的。
+24. **错过了就是错过了，开机补投一次是宿主的既定语义。** 用户设的 23:55 那天机器关着，第二天 12:42 开机时补投了一次——`schedule` 的文档原文是「After downtime, only the latest missed delivery occurrence is delivered」，所以关多久都只补最近那一次，不会补一串。这不是插件的 bug；面板的 `/missed` 提醒就是为这件事准备的。
+25. **日记要知道「在做哪个项目」，而项目来自 cwd，不是来自标题。** 用户的抱怨是「事情都记着，但什么项目却不知道」。根因是 `episodes.workspace` 一直是空字符串（`record()` 没传），而 `renderDigest` 把每段对话一律印成 `## 一段对话`。修法分两步：落库时写 `workspace: sessionCwd(session)`；取素材时用 `dayDigest` 新增的 `describe` 回调把宿主里的会话标题与首句补进来（`sessionLabels()`，走 `sessionProjectionCache`，零 I/O）。因此**不要**指望「打开标题刷新插件」来修这件事——它只是让标题更准；项目名与标题插件无关。
+26. **默认人设写成跑得动的一段话，不是形容词。** 「爱吃白饭的大肥鱼」沿用 `dsh-companion-preset`（小肥鱼）的语气规则：简体中文、像人说话、不列条目/小标题/整段加粗、可以自嘲和少量颜文字、不总结不复述、不编造。区别是它写的是「他」的一天而不是聊天回话。人设放在 `DEFAULT_DIARY_PERSONA`，设置页留空就用它——所以改它等于改所有留空的人。
 
 ---
 
@@ -143,6 +146,9 @@ test/                    六个 .test.mjs + smoke.cjs
 - [ ] 概览与记忆页顶部的「定时任务错过了某天」提醒是否出现、按钮是否只补那一天、那天有页面后是否自己消失
 - [ ] 真的错过一次定时任务之后，`/missed` 给出的日期是否就是错过的那个目标日（凌晨投递不应误报）
 - [ ] 设置页「每个预设的默认权限」在真实数据下列出的是哪些预设、改一行之后新开会话是否真的按它来
+- [ ] 预设卡片横排之后：宽窗口下一屏能放下几个、窄窗口折行是否正常、卡片之间高度是否因为预设名长短而不齐
+- [ ] 下一次日记的素材里是否真的出现 `## 标题（项目 X · 预设 Y）` 和 `开头：…`（`episodes.workspace` 从本次改动之后的行才开始有值，旧行仍是空）
+- [ ] 「爱吃白饭的大肥鱼」写出来的东西是不是用户想要的味道（语气、具体度、有没有编造）
 - [ ] 设置页「写日记的人格」保存后，下一次投递的会话头里 `agentPreset` 是否是 `deepmemory-diary`、人格段是否真的换了
 - [ ] `deepmemory-diary` 出现在新建会话的预设选择器里是否合适（没有 bash 之类，只有文件读写）
 - [ ] 下一次日记投递时，那个会话的工具清单是否真的从 79 降到九个（看会话里的工具调用列表，或日志里有没有 `deepmemory: could not narrow the diary tools` 这条 warn）

@@ -4,8 +4,10 @@ import { MemoryStore } from '../lib/store.js'
 import {
   composeInstruction,
   dayDigest,
+  DEFAULT_DIARY_PERSONA,
   localDay,
   previousDay,
+  projectOf,
   recentDays,
   renderDigest,
   targetDay,
@@ -97,13 +99,43 @@ test('digest is empty for a day with no episodes', () => {
   store.close()
 })
 
-test('renderDigest labels each session with preset and workspace', () => {
+test('renderDigest names the project and the preset', () => {
   const { store } = seed()
   store.saveEpisode({ role: 'user', text: '素材一条', sessionId: 's9', presetId: 'companion', workspace: 'C:/w' })
   const text = renderDigest(dayDigest(store, localDay()))
-  assert.ok(text.includes('companion · C:/w'))
+  assert.ok(text.includes('（项目 w · 预设 companion）'))
   assert.ok(text.includes('素材一条'))
   store.close()
+})
+
+test('describe supplies the session title so the day has a subject', () => {
+  const { store } = seed()
+  const day = localDay()
+  store.saveEpisode({ role: 'user', text: '把面板重做一下', sessionId: 's10', workspace: 'C:/Project/dsh-deepmemory' })
+  const digest = dayDigest(store, day, {
+    describe: () => ({ title: '重做深度记忆面板', project: 'dsh-deepmemory', opening: '把面板重做一下' }),
+  })
+  const text = renderDigest(digest)
+  assert.ok(text.includes('## 重做深度记忆面板（项目 dsh-deepmemory'))
+  assert.ok(text.includes('开头：把面板重做一下'))
+  // The title replaces the anonymous heading; it must not appear alongside it.
+  assert.ok(!text.includes('## 一段对话'))
+  store.close()
+})
+
+test('projectOf takes the last path segment', () => {
+  assert.equal(projectOf('C:/Project/dsh-deepmemory'), 'dsh-deepmemory')
+  assert.equal(projectOf('C:\\Project\\dsh-deepmemory\\'), 'dsh-deepmemory')
+  assert.equal(projectOf('dsh-deepmemory'), 'dsh-deepmemory')
+  assert.equal(projectOf(''), '')
+  assert.equal(projectOf(undefined), '')
+})
+
+test('the shipped persona is the fish the user asked for', () => {
+  assert.ok(DEFAULT_DIARY_PERSONA.includes('爱吃白饭的大肥鱼'))
+  assert.ok(DEFAULT_DIARY_PERSONA.includes('不是给你的命令'))
+  // The style rules the companion preset settled on, restated for the diary.
+  assert.ok(DEFAULT_DIARY_PERSONA.includes('不用小标题'))
 })
 
 
