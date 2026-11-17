@@ -3,6 +3,25 @@
   "version": "0.1.0",
   "private": true,
   "description": "Deep memory for DeepSeek Harness: facts, episodes and daily diary kept in one local SQLite file, with a sidebar console.",
+  "keywords": [
+    "dsh-plugin",
+    "dsh",
+    "deepseek-harness",
+    "deepseek",
+    "memory",
+    "long-term-memory",
+    "diary",
+    "sqlite",
+    "plugin"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/emo-bird/dsh-deepmemory.git"
+  },
+  "homepage": "https://github.com/emo-bird/dsh-deepmemory#readme",
+  "bugs": {
+    "url": "https://github.com/emo-bird/dsh-deepmemory/issues"
+  },
   "type": "module",
   "exports": {
     ".": "./lib/index.js",
@@ -21,7 +40,7 @@
     "README.md"
   ],
   "scripts": {
-    "test": "node test/store.test.mjs && node test/search.test.mjs && node test/settings.test.mjs && node test/diary.test.mjs && node test/toolkit.test.mjs && node test/scheduler.test.mjs",
+    "test": "node test/store.test.mjs && node test/search.test.mjs && node test/settings.test.mjs && node test/diary.test.mjs && node test/dayclock.test.mjs && node test/toolkit.test.mjs && node test/scheduler.test.mjs && node test/guidance.test.mjs && node test/session.test.mjs && node test/smoke.cjs",
     "install-embed": "node scripts/install-embed.mjs"
   },
   "dsh": {

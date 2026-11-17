@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { MemoryStore } from '../lib/store.js'
-import { MemorySearch, bigrams, bigramSimilarity, cosine } from '../lib/search.js'
+import { MemorySearch, bigrams, bigramSimilarity, cosine, matchMarks } from '../lib/search.js'
 
 const seeded = () => {
   const store = new MemoryStore(':memory:')
@@ -120,4 +120,79 @@ test('a run-together query falls back to character bigrams', async () => {
   const search = new MemorySearch(store)
   const { hits } = await search.search('水母颜色', { limit: 5 })
   assert.equal(hits.length, 1)
+})
+
+test('a literal term is reported as an exact mark', async () => {
+  const store = new MemoryStore(':memory:')
+  store.saveEpisode({ sessionId: 's1', presetId: 'p', role: 'user', text: '我记得上次聊过水母图标的颜色', importance: 1 })
+  const search = new MemorySearch(store)
+  const { hits } = await search.search('水母', { limit: 5 })
+  assert.deepEqual(hits[0].marks, [{ text: '水母', tier: 'exact' }])
+  store.close()
+})
+
+test('a bigram-only match is reported as fuzzy, not left unmarked', async () => {
+  const store = new MemoryStore(':memory:')
+  store.saveEpisode({ sessionId: 's1', presetId: 'p', role: 'user', text: '我记得上次聊过水母图标的颜色', importance: 1 })
+  const search = new MemorySearch(store)
+  const { hits } = await search.search('水母颜色', { limit: 5 })
+  assert.equal(hits.length, 1)
+  assert.ok(hits[0].marks.length > 0, 'a fuzzy hit must still carry something to highlight')
+  assert.ok(hits[0].marks.every((mark) => mark.tier === 'fuzzy'))
+  const texts = hits[0].marks.map((mark) => mark.text)
+  assert.ok(texts.includes('水母'))
+  assert.ok(texts.includes('颜色'))
+  store.close()
+})
+
+test('matchMarks keeps the whole term when it is present and caps the list', () => {
+  assert.deepEqual(matchMarks('今天聊了水母颜色的方案', '水母颜色'), [{ text: '水母颜色', tier: 'exact' }])
+  assert.deepEqual(matchMarks('完全不相干的一句话', '水母'), [])
+})
+
+test('tier 3 caches vectors so a second search embeds only the query', async () => {
+  const { store } = seeded()
+  let batches = 0
+  const embed = async (texts) => {
+    batches += 1
+    return texts.map((t) => Float32Array.from([t.includes('记忆') ? 1 : 0, t.includes('白米') ? 1 : 0]))
+  }
+  const search = new MemorySearch(store, { embedder: { model: 'fake', dim: 2, embed } })
+  const first = await search.search('记忆', { semantic: true })
+  assert.ok(first.tiers.semantic > 0)
+  assert.ok(store.stats().vectors > 0, 'the first search must have written the cache')
+  const after = batches
+  const second = await search.search('记忆', { semantic: true })
+  assert.ok(second.tiers.semantic > 0)
+  // Second pass: one batch for the query, none for the candidates.
+  assert.equal(batches - after, 1)
+  store.close()
+})
+
+test('tier 3 does not reuse vectors from another model', async () => {
+  const { store } = seeded()
+  const embed = async (texts) => texts.map((t) => Float32Array.from([t.includes('记忆') ? 1 : 0, 1]))
+  const first = new MemorySearch(store, { embedder: { model: 'model-a', dim: 2, embed } })
+  await first.search('记忆', { semantic: true })
+  const cached = store.stats().vectors
+  assert.ok(cached > 0)
+  // A different model name must miss the cache entirely rather than blend two
+  // unrelated vector spaces.
+  const second = new MemorySearch(store, { embedder: { model: 'model-b', dim: 2, embed } })
+  const out = await second.search('记忆', { semantic: true })
+  assert.ok(out.tiers.semantic > 0)
+  assert.equal(store.stats().vectors, cached, 'same ids, rewritten rows for the new model')
+  store.close()
+})
+
+test('an episode importance nudges the score without dominating it', async () => {
+  const store = new MemoryStore(':memory:')
+  store.saveEpisode({ sessionId: 's1', role: 'user', text: '记忆系统的一条长记录', importance: 3 })
+  store.saveEpisode({ sessionId: 's1', role: 'user', text: '记忆系统的一条短记录', importance: 1 })
+  const search = new MemorySearch(store)
+  const { hits } = await search.search('记忆系统', { limit: 5 })
+  assert.equal(hits.length, 2)
+  const byText = new Map(hits.map((hit) => [hit.text, hit.score]))
+  assert.ok(byText.get('记忆系统的一条长记录') > byText.get('记忆系统的一条短记录'))
+  store.close()
 })

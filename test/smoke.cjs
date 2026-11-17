@@ -14,7 +14,7 @@
  * fill in, which is what makes the rendered text worth asserting on.
  *
  * Environment:
- *   SMOKE_TAB=memory|search|overview|sessions|settings  pick the panel tab
+ *   SMOKE_TAB=facts|memory|search|overview|sessions|settings  pick the panel tab
  *   SMOKE_NEEDLES="a;;b"                                every needle must appear
  */
 const fs = require('node:fs')
@@ -142,7 +142,7 @@ const fixtures = {
     latest: { id: 'p1', day: '2026-11-10', text: '今天把小车的跟踪环调稳了，最后是增益太高。', origin: '', createdAt: Date.now() },
   },
   '/api/deepmemory/facts': {
-    items: [{ id: 'f1', text: '小车用 PID 跟踪黑线', importance: 4, subject: '小车', createdAt: Date.now(), sourceSession: 'sess-1' }],
+    items: [{ id: 'f1', scope: 'global', text: '小车用 PID 跟踪黑线', weight: 4, subject: '小车', createdAt: Date.now(), updatedAt: Date.now() }],
   },
   '/api/deepmemory/episodes': {
     items: [
@@ -158,6 +158,7 @@ const fixtures = {
     semantic: { enabled: false },
     diary: { persona: '你是「爱吃白饭的大肥鱼」，一条住在鸽鸽电脑里的鱼。', provider: '', model: '' },
     diaryDefault: '你是「爱吃白饭的大肥鱼」，一条住在鸽鸽电脑里的鱼。',
+    dayclock: { enabled: true, gapMinutes: 90, latestHour: 4 },
     roster: [
       { id: 'standard', name: '标准' },
       { id: 'deepmemory-diary', name: '深度记忆 · 写日记' },
@@ -205,6 +206,15 @@ const fixtures = {
       { id: 'openai', name: 'OpenAI', models: [{ id: 'gpt-5-mini', name: 'GPT-5 mini' }] },
     ],
     default: { provider: 'deepseek', model: 'deepseek-v4-flash' },
+  },
+  '/api/deepmemory/daycut': {
+    config: { enabled: true, gapMinutes: 90, latestHour: 4 },
+    today: '2026-11-11',
+    days: [
+      { day: '2026-11-09', from: '00:00', to: '02:00', cutHour: 0, nextCutHour: 2, count: 6, tailCount: 1, pages: 1 },
+      { day: '2026-11-10', from: '02:00', to: '04:00', cutHour: 2, nextCutHour: 4, count: 12, tailCount: 0, pages: 1 },
+      { day: '2026-11-11', from: '04:00', to: '03:00', cutHour: 4, nextCutHour: 3, count: 8, tailCount: 2, pages: 0 },
+    ],
   },
   '/api/deepmemory/search': { hits: [], tiers: {} },
 }
@@ -327,7 +337,7 @@ async function settle(entry) {
 const needles = (process.env.SMOKE_NEEDLES ?? '').split(';;').filter((part) => part !== '')
 
 /** Every tab the panel can show; the CSS audit wants all of them rendered. */
-const TAB_NAMES = ['overview', 'search', 'memory', 'sessions', 'settings']
+const TAB_NAMES = ['overview', 'search', 'memory', 'facts', 'sessions', 'settings']
 
 async function main() {
   let total = 0

@@ -177,3 +177,17 @@ test('the include filter drops conversations that opted out of the diary', () =>
   assert.ok(!material.includes('不该出现在日记里'))
   store.close()
 })
+
+test('the instruction asks for digits, not Chinese numerals, when a clock time is unavoidable', () => {
+  const text = composeInstruction()
+  // The rule itself must be stated: no exact clock times in the body, and any
+  // that survive are written as digits.
+  assert.match(text, /尽量不出现精确时间/)
+  assert.match(text, /不要写成「两点」/)
+  assert.ok(text.includes('02:00'))
+})
+
+test('the persona carries the same time rule, so the two never disagree', () => {
+  assert.match(DEFAULT_DIARY_PERSONA, /不出现钟点/)
+  assert.match(DEFAULT_DIARY_PERSONA, /不要写汉字数字/)
+})

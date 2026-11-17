@@ -124,3 +124,120 @@ test('deleteSession removes only that session episodes and keeps facts', () => {
   assert.equal(s.firstUserLines().get('a'), undefined)
   s.close()
 })
+
+test('discardDiaryPages keeps the rewrite and drops the page it replaced', () => {
+  const s = fresh()
+  s.saveDiary({ day: '2026-11-08', text: '午夜前写的那篇', origin: 'run-a' })
+  s.saveDiary({ day: '2026-11-08', text: '补了夜尾巴重写的那篇', origin: 'tail' })
+  assert.equal(s.pagesOfDay('2026-11-08').length, 2)
+  assert.deepEqual(s.discardDiaryPages('2026-11-08', 'tail'), { removed: 1, kept: 'tail', pages: 1 })
+  const pages = s.pagesOfDay('2026-11-08')
+  assert.equal(pages.length, 1)
+  assert.equal(pages[0].origin, 'tail')
+  assert.match(pages[0].text, /夜尾巴/)
+  s.close()
+})
+
+test('discardDiaryPages refuses an empty or unknown keep', () => {
+  const s = fresh()
+  s.saveDiary({ day: '2026-11-08', text: '唯一那篇', origin: 'run-a' })
+  // Empty would mean "empty the day".
+  assert.deepEqual(s.discardDiaryPages('2026-11-08', ''), { removed: 0, kept: '', pages: 1 })
+  // A keep naming no page means the rewrite never landed: deleting would lose
+  // the only page the day has.
+  assert.deepEqual(s.discardDiaryPages('2026-11-08', 'tail'), { removed: 0, kept: 'tail', pages: 1 })
+  assert.equal(s.pagesOfDay('2026-11-08').length, 1)
+  s.close()
+})
+
+test('discardDiaryPages never touches a hand-written page', () => {
+  const s = fresh()
+  s.saveDiary({ day: '2026-11-08', text: '手写的一篇', origin: '' })
+  s.saveDiary({ day: '2026-11-08', text: '投递写的一篇', origin: 'run-a' })
+  s.saveDiary({ day: '2026-11-08', text: '补夜尾巴的一篇', origin: 'tail' })
+  assert.equal(s.discardDiaryPages('2026-11-08', 'tail').removed, 1)
+  const origins = s.pagesOfDay('2026-11-08').map((page) => page.origin).sort()
+  assert.deepEqual(origins, ['', 'tail'])
+  s.close()
+})
+
+test('facts: weight decides what survives recall truncation', () => {
+  const s = fresh()
+  s.saveFact({ text: '不重要的一条', weight: 1 })
+  s.saveFact({ text: '很重要的一条', weight: 5 })
+  // listFacts is the panel's view: it has no weight ordering at all, so the
+  // promise can only be kept by a separate query.
+  assert.equal(s.listFacts().length, 2)
+  // topFacts is recall's view: the promise memory_save makes.
+  assert.equal(s.topFacts(1)[0].text, '很重要的一条')
+  assert.equal(s.topFacts(5).length, 2)
+  s.close()
+})
+
+test('facts: lastUsedAt is readable after a touch', () => {
+  const s = fresh()
+  const { id } = s.saveFact({ text: '被用过的一条' })
+  assert.equal(s.listFacts()[0].lastUsedAt, 0)
+  s.touchFacts([id])
+  assert.ok(s.listFacts()[0].lastUsedAt > 0)
+  s.close()
+})
+
+test('facts: updateFact rewrites in place and keeps the id', () => {
+  const s = fresh()
+  const { id } = s.saveFact({ text: '错别字的一条', subject: 'x', weight: 2 })
+  const out = s.updateFact({ id, text: '改好的一条', weight: 4 })
+  assert.equal(out.id, id)
+  const rows = s.listFacts()
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0].text, '改好的一条')
+  assert.equal(rows[0].weight, 4)
+  assert.equal(rows[0].subject, 'x')
+  s.close()
+})
+
+test('facts: updateFact refuses an unknown id and a text clash', () => {
+  const s = fresh()
+  assert.equal(s.updateFact({ id: 'nope', text: 'x' }), undefined)
+  s.saveFact({ text: '已有的' })
+  const { id } = s.saveFact({ text: '另一条' })
+  assert.throws(() => s.updateFact({ id, text: '已有的' }), /already has that text/)
+  assert.throws(() => s.updateFact({ id, text: '   ' }), /text is empty/)
+  assert.throws(() => s.updateFact({ id, weight: 0 }), /weight must be positive/)
+  s.close()
+})
+
+test('vec: vectors round-trip per model and are dropped on rewrite', () => {
+  const s = fresh()
+  const { id } = s.saveFact({ text: '带向量的一条' })
+  s.saveVectors('fact', [id], [Float32Array.from([0.5, 0.25])], 'model-a')
+  assert.equal(s.stats().vectors, 1)
+  const hit = s.loadVectors('fact', [id], 'model-a')
+  assert.equal(hit.size, 1)
+  assert.deepEqual([...hit.get(id)], [0.5, 0.25])
+  // A different model must not read the other model's space.
+  assert.equal(s.loadVectors('fact', [id], 'model-b').size, 0)
+  // Rewriting the text invalidates the vector: it describes the old sentence.
+  s.updateFact({ id, text: '改写了的一条' })
+  assert.equal(s.loadVectors('fact', [id], 'model-a').size, 0)
+  s.close()
+})
+
+test('vec: rewriting a diary page drops its cached vector too', () => {
+  const s = fresh()
+  const { id } = s.saveDiary({ day: '2026-11-08', text: '第一版', origin: 'run-a' })
+  s.saveVectors('diary', [id], [Float32Array.from([1, 0])], 'model-a')
+  assert.equal(s.loadVectors('diary', [id], 'model-a').size, 1)
+  s.saveDiary({ day: '2026-11-08', text: '第二版', origin: 'run-a' })
+  assert.equal(s.loadVectors('diary', [id], 'model-a').size, 0)
+  s.close()
+})
+
+test('vec: deleting a fact clears its vector', () => {
+  const s = fresh()
+  const { id } = s.saveFact({ text: '要删掉的一条' })
+  s.saveVectors('fact', [id], [Float32Array.from([1, 1])], 'model-a')
+  s.deleteFact(id)
+  assert.equal(s.stats().vectors, 0)
+  s.close()
+})

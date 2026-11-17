@@ -1,12 +1,15 @@
 # dsh-deepmemory
 
-深度记忆插件：跨会话的长期记忆 + 侧边栏控制台。
+[![](https://img.shields.io/badge/powered_by-dsh-4D6BFE?style=flat-square&logo=deepseek&logoColor=white)](https://github.com/deepseek-ai/deepseek-harness)
+
+深度记忆插件：跨会话的长期记忆 + 侧边栏控制台。给 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 用。
 
 一个本地 SQLite 文件存四类东西——**事实**（facts，长期有效的一句话）、**片段**（episodes，双方说过的话——用户说的话和助手回的话都记）、**日记**（diary，一天可以有多篇，一次投递一篇）、**向量**（vec，可选的嵌入索引）。会话日志才是真源，这个库是可以在任何时候重建的缓存。
 
 - 包名：`@emo-bird/dsh-deepmemory`
 - 插件 id：`deepmemory`
 - 数据目录：`${DSH_HOME:-~/.dsh}/deepmemory/`（`memory.db` + `settings.json`）
+- 关键词：`dsh-plugin` `deepseek-harness` 长期记忆 跨会话记忆 日记 sqlite
 
 ## 它解决什么
 
@@ -25,6 +28,16 @@
 | 3 | 嵌入向量余弦重排 | 取决于模型 | 语义相近但用词不同的 |
 
 档 1+2 永远开，零依赖。档 3 默认关闭，面板里开启后需要模型；运行失败自动降级到档 2，不会让搜索整体失败。
+
+**档 3 的向量是缓存下来的**：候选文本第一次进档 3 时算一次嵌入，写进 `vec` 表（带模型名和维度），
+下次同样的文本直接读出来用，只有查询本身每次现算。所以第二次之后的搜索不再把几十条候选重新过一遍模型。
+向量跟着原文走：改写事实或日记页会把那一条的向量删掉（它描述的是旧句子），切换嵌入模型则整表清空
+——不同模型是不同向量空间，混着用等于拿两套坐标比距离。概览页的「向量」格子就是这张表的行数，
+它是缓存大小的读数，不是记忆条数。
+
+**排序用得上权重**：事实的 `weight`（1–5）和片段的 `importance` 都参与打分，但是小加成——
+事实最多 +0.2，片段最多 +0.06，字面与语义的相似度仍然主导。`memory_recall` 是另一套视图：
+它按 `weight` 倒序截断，所以 `memory_save` 参数说明里那句「权重高的更容易留在 recall 里」是真兑现的。
 
 **换嵌入模型**：`vec` 表只是派生索引，删掉重算即可；原文不受影响。
 
@@ -67,12 +80,13 @@
 
 `memory_forget` 的「清空某个会话」分支走同一套门控（每会话的 `forget` 开关，默认关），区别只是调用方是模型还是人；面板上那个红字链接已经撤掉，面板只留逐条删除。
 
-另外两个**只存在于定时日记会话**里，普通会话根本不会收到它们的定义：
+另外三个**只存在于定时日记会话**里，普通会话根本不会收到它们的定义：
 
-- `diary_material` — 取当天素材，已按每会话的**日**开关筛过
+- `diary_material` — 取当天的素材，已按每会话的**日**开关筛过；顺带给出这一天的窗口（日界到几点）和「后半夜还有几条」
 - `diary_write` — 写一篇日记
+- `diary_discard` — 删掉同一天里被新篇替代的旧篇（补夜尾巴之后用）。`keep` 给要留下的那篇的 `origin`；给空、或者那天找不到对应页面，它就什么都不删
 
-判定方式不是猜：日记任务跑在 `<数据目录>/diary` 下，插件只在 `agent/created` 时看到工作目录等于这个目录，才把这两个工具挂到该 agent 的作用域上。所以「工具列表里没有 diary_write」是结构性的，不靠模型自觉。
+判定方式不是猜：日记任务跑在 `<数据目录>/diary` 下，插件只在 `agent/created` 时看到工作目录等于这个目录，才把这三个工具挂到该 agent 的作用域上。所以「工具列表里没有 diary_write」是结构性的，不靠模型自觉。
 
 ## 日记
 
@@ -95,9 +109,29 @@
 由 DSH 定时任务在固定时间开一个新会话（工作目录 `<数据目录>/diary`），模型先调 `diary_material` 取素材、写完调 `diary_write` 落盘。插件本身不含任何模型调用。
 
 - `lib/diary.js` 的 `composeInstruction(day)` 是那段指令，不传 `day` 时要求模型按投递时刻自己算日期；素材走工具，不塞进 prompt
-- `targetDay()` 是那条日界规则：04:00 之前算「昨天」，04:00 之后算「今天」（`DAY_CUTOFF_HOUR`）
+- `targetDay()` 是那条日界规则：按设置里的「最晚小时」算——在此之前算「昨天」，之后算「今天」
 - `renderDigest` 按会话分组、按时间排序，每段对话带标题 / 项目 / 首句，单条截断 400 字，最多 400 条
 - 日记日界用**本地时间**（`localDay`），`store.js` 里 episodes 的 `day` 字段也是本地日期——用 UTC 会把凌晨的消息记到前一天
+
+### 一天到哪里结束：日界是推出来的
+
+固定 04:00 的日界有个明显的毛病：熬夜到两三点那次，午夜之后的部分被算进第二天，写出来的前一天像是「晚上十一点就断了」，后一天又莫名其妙多出一段凌晨的事。
+
+所以日界改成**从时间戳推**（`lib/dayclock.js`）：取当天最后一段连续活动（相邻两条间隔不超过「空档阈值」，默认 90 分钟）结束的那个钟点，向上取整，封顶到「最晚小时」（默认 4 点）。于是：
+
+- 干完活去睡觉的日子，窗口就停在睡前，不会硬拉长到 4 点
+- 真熬夜到 3 点的日子，窗口跟着到 3 点，那段凌晨的事仍属于「这一天」
+- 中间断了两小时以上，就认作「这一天结束了」，之后的活动算下一天
+
+三个参数都在设置页「一天到哪里结束」卡里，存在 `settings.json` 的 `dayclock`（`enabled` / `gapMinutes` / `latestHour`），卡上还有一张最近 7 天的推算结果表（每天一条：区间、条数、后半夜几条、有没有写过）。关掉开关就退回普通的零点到零点。
+
+落库的 `episodes.day` 仍然是当时的日历日——那是历史事实；窗口是**写日记读素材的时候**算出来的（`dayWindow` + `episodesBetween`）。所以调参数会立刻改变之后每一篇日记的素材归属，不需要迁移。面板的日历和 `/day` 仍按 `episodes.day` 切：日界是为了让日记读起来连贯，不是为了重写面板的时间轴。
+
+### 夜尾巴：第二天补前一天的凌晨
+
+投递时间不变（还是深夜那一投）。第一次投递之后到日界之间发生的事，第二天投递时补：`taskPrompt()` 是两阶段的，第一步先看前一天「后半夜有条目、且已经写过一篇」，有就 `diary_read` 读那篇、把后半夜的事并进去、用 `origin: "tail"` 落一篇新的；第二步才写今天。
+
+新篇写过、写手自己读一遍确认更全更连贯，才会调 `diary_discard` 把旧那篇删掉；校对不过就留着两篇让人在面板里定——多一篇永远比丢一篇好。
 
 **补写和重写只由人发起，写手不自己找活**：定时任务那一次只写它自己那一天，不扫「最近几天缺不缺」，也不去查哪个日子还没有日记。早期版本让模型自己补缺，结果是投递到一半先发现今天没素材、又发现昨天已经写过，然后就结束了——用户要的是「我叫你写哪一天，你写哪一天」。
 
@@ -111,19 +145,28 @@
 
 `sidebar.panellist` 的 id 与 `main` 的 key 都是 `deepmemory`——侧边栏只认 id 去解析主面板。
 
-五个页签：**概览**、**搜索**、**记忆**、**会话**、设置。
+六个页签：**概览**、**搜索**、**记忆**、**事实**、**会话**、设置。
 
-面板右上角有一个搜索框，回车就跳到「搜索」页跑一次检索（和工具走同一条 `MemorySearch`
-流水线，所以面板能搜到的和 agent 能搜到的是同一批），结果按事实 / 片段 / 日记打标签，
-命中的词高亮，可以直接删。搜索是独立页签，所以搜完还能切回去看别的，不必先清空输入框。
+面板顶部只有标题和「刷新」：搜索框在「搜索」页里，事实的筛子在「事实」页里——顶栏那个
+（跟任何一页都没关系、按下去会把你从当前页顶走的）全局搜索框已经拿掉了。
 
-检索是模糊的：三个字以上的查询走 FTS5 trigram，短查询补一遍按词的 `LIKE`，
+搜索是模糊的：三个字以上的查询走 FTS5 trigram，短查询补一遍按词的 `LIKE`，
 连成一串的查询（「水母颜色」）在没有整体命中时会退化成字符 bigram 重试——
 所以两三个字的词、只出现在长句里某个片段的词，都还能捞出来，而不是只有完全一致才命中。
 
+**命中的词分两种颜色标**：原词真在那句里，用链接色加粗；如果只是靠字形相近（bigram）
+找到的——比如搜「水母颜色」而那句只有「水母」和「颜色」——那两个片段用**底色 + 虚线下划线**标，
+行尾再加一枚「字形相近」的小标签。哪种标法不是前端猜的：三档检索在 `lib/search.js` 里
+已经知道每条命中是走哪一档进来的，所以 `search()` 会在每条 hit 上带一个 `marks: [{text, tier}]`
+（`tier` 是 `exact` 或 `fuzzy`），前端 `highlight(text, query, marks)` 照单标。
+语义第三档（嵌入）不召回新文档、只重排已有候选，所以每条命中至少有一个字面重合的片段可以标——
+不存在「纯语义、零字面」的命中。
+
 **「概览」**是 `docs/1.xml` 里那一版布局：顶上一行指标，下面是**近一年的贡献墙**（照 GitHub 主页那种排法：一列一周、一格一天，颜色深浅按当天的片段 + 事实数分四档，档位边界取当天数据的 25/50/75 分位，所以安静的日子也看得出层次；有素材却没写日记的那天，格子带一圈警示色描边，点任意一格跳到记忆页的那一天）。格子上的说明悬停即出、自己画：一行是日期，下面三行分别是片段 / 事实 / 日记的条数，缺口那天多一行警示语——不用浏览器原生 `title`，那个要等将近一秒才弹，而且只有一行。再往下两栏——左边最近 4 篇日记，右边最近 3 条事实、最近 5 条片段，三栏用的是**同一种行**（类别标签 + 时间 + 两行截断正文 + 命中词高亮），点一行直接跳记忆页的那一天；不再有「展开全文」和「去看这一天」两个按钮，正文靠两行截断对齐，两栏底边落在同一条线上。底部的「重建检索索引」会回来一行结果（事实 / 片段 / 日记各重建了多少条），不再是一闪而过。
 
-**「搜索」**页把检索参数摆出来了：搜索框、时间范围（全部 / 近 7 / 30 / 90 天）、类别（事实 / 片段 / 日记，至少留一个）。结果**按类别分组依次展示**，命中的词高亮，点条目跳到记忆页的那一天，右边可以直接删。
+**「搜索」**页把检索参数摆出来了：搜索框、时间范围（全部 / 近 7 / 30 / 90 天）、类别（事实 / 片段 / 日记，至少留一个）。结果**按类别分组依次展示**，命中的词按上面那两种颜色标出来，点条目跳到记忆页的那一天，右边可以直接删。
+
+**「事实」**页是唯一能用手写东西的地方：一张事实表，顶上「新增一条事实」（正文 + 可选的对象 + 权重 1–5），下面按更新时间倒序列出全部事实，每行带权重、对象、时间、**最近一次被搜索命中的时间**（`last_used_at`，从没被命中过就写「从未命中」）和删除。表上方的筛子只在已加载的行里匹配（文字或对象），所以打字是即时的、也不消耗检索那条路——事实表本来就只有几百条，全量比排名更有用。`memory_save` 写进来的和我在这里写的落在同一张表、同一套去重逻辑（同一条文字 + 同一个 scope 会合并权重而不是插两行）。概览顶上那个「事实」数字格子也是进这张表的入口。
 
 **「记忆」**页是日历 + 目录树 + 右栏内容：
 
@@ -140,7 +183,7 @@
 
 **首句**优先取 `episodes` 里该会话最早的一条 user 记录（`ROW_NUMBER()` 取，不用 `MIN(created_at)` 自连接——同一毫秒的两条会因此挑错）；没有记录的旧会话回退到 `sessionProjectionCache` 的 `titleInput.first.text`，那是宿主用来生成标题的原始提问，所以老会话也有首句。会话清单来自 `sessionPersistence.list()`，标题走 `sessionProjectionCache.cachedSnapshot`（零 I/O），子代理会话被排除。
 
-「设置」页：**按预设的默认权限**、写日记的人格与模型、每日日记任务、语义检索依赖与推荐嵌入模型。
+「设置」页：**按预设的默认权限**、写日记的人格与模型、**一天到哪里结束（日界）**、每日日记任务、语义检索依赖与推荐嵌入模型。
 
 **权限不再有「全局默认」那一栏**。每个预设（`standard`、`minimal`、以及插件自己注册的 `deepmemory-diary`……）各有一组「新会话」和「子代理」的读写日删默认值：会话创建时读一次就归自己所有，之后改预设只影响将来的会话；子代理先跟父会话，父会话没有覆盖时才看预设里那一行。落在 `settings.json` 里的永远只是「和上一层不同的那些键」，所以「继承」是文件的自然状态，一调回默认那一行就整个消失。一个预设一块，横排成卡片（`repeat(auto-fit, minmax(176px, 1fr))`），窄了就自动折行——早先是竖着一条条铺，装上几个预设就把设置页顶下去了。
 
@@ -148,17 +191,21 @@
 
 这段话**存在设置文件里，不是写死在代码里**。第一次激活时插件把内置文本写进 `settings.json` 的 `diary.persona`，之后设置页那个输入框显示的就是日记真正在用的那段话——没有「留空才用内置」这种隐含规则要记。想回到出厂那版，点输入框下面的「填入内置人格」，再点保存；宿主通过 `snapshot.diaryDefault` 把内置文本交给面板，所以那个按钮永远拿得到最新的出厂版本。
 
-内置的那位是 **爱吃白饭的大肥鱼**：一条住在电脑里的鱼，白天藏在显示器后面看人敲键盘，晚上替他把这一天记下来；第一人称「我」，写的是「他」；平实、慢、具体，不列条目、不整段加粗、不用「今天真是充实的一天」收尾，可以自嘲可以有一点颜文字但别每句都撒；抓具体的事（改了什么、卡在哪里、几点才想起来吃饭），不写「处理了一些事情」；可以带情绪和判断，但不编造素材里没有的事，记不清就写记不清。语气是从 `dsh-companion-preset`（小肥鱼）那套规则里收过来的，只是把「聊天」换成了「记事」。
+内置的那位是 **爱吃白饭的大肥鱼**：一条住在电脑里的鱼，白天藏在显示器后面看人敲键盘，晚上替他把这一天记下来；第一人称「我」，写的是「他」；平实、慢、具体，不列条目、不整段加粗、不用「今天真是充实的一天」收尾，可以自嘲可以有一点颜文字但别每句都撒，emoji 一篇里两三处就够；抓具体的事（改了什么、卡在哪里、又忘了吃饭），不写「处理了一些事情」；可以带情绪和判断，看到一段长得离谱的连续工作可以替他觉得累、看到反复绕回来的纠结可以笑一下再猜他在跟什么较劲，但不编造素材里没有的事，记不清就写记不清。语气是从 `dsh-companion-preset`（小肥鱼）那套规则里收过来的，只是把「聊天」换成了「记事」。
+
+**日记里不写钟点**：人不会在日记里记「13:22 我打开了编辑器」，只会说「下午」「快天亮的时候」「一直弄到很晚」。素材里那些 `HH:mm` 是给写手定位先后顺序用的，不是给它抄进正文的——所以 `composeInstruction` 和内置人设里都写明了这条：正文尽量不出现精确时间，先后顺序用「先…过了一会儿…后来」交代；万一非要点一个时刻（跨午夜那段偶尔需要），写阿拉伯数字 `02:00`，**不写汉字数字**（「两点」「十三点二十二分」）。这条不只写在提示词里，也写进了设置页存的那份人设——人设是会长久留着的，提示词每条投递都用，两处说法得一致。
 
 **模型是从下拉框里选的，不是手打的**。那个下拉框的数据来自宿主自己的 `llm` 服务：面板读 `GET /api/deepmemory/model-catalog`，插件在宿主里调 `listProviders()`（没有可用路由时退回 `listConfigurableProviders()`），再对每个 provider `await listModels(id)`，拼成 `{providers:[{id,name,models:[{id,name}]}], default:{provider,model}|null}` 返回；`default` 是 `agentDefaultModel.currentSelection()` 报的全局默认，也就是下拉框第一项「跟随全局默认（provider / model）」显示的东西。选项按 provider 分 `<optgroup>`，一个 provider 一个组。这样做是为了不让人去背 provider id 和模型 id——手填一个拼错的 id 不会报错，只会在投递时静默回退。已经保存、但宿主现在不再广告的一对仍然会留成一项「（列表里没有）provider / model」，否则 `<select>` 会悄悄跳到第一项，下一次保存就把模型改了。宿主一个模型路由都没有、或者这条路由读不到（比如插件跑在没有 `llm` 服务的环境里）时，面板退回两个手填输入框，并说明原因。
 
-删除的入口都在「记忆」页右栏：每条事实、每条片段、每一篇日记右边都有「删除」。搜索页的结果也能直接删。这些都不需要开会话的「删」开关，只有模型侧「清空某个会话的全部片段」受它约束——那是唯一影响一片历史的动作。日记与片段删除前会弹一次确认。
+**一天到哪里结束**：三个参数——开关、空档阈值（相邻两条间隔超过它就算「这一天过去了」，30–360 分钟，默认 90）、最晚小时（最多算到几点，1–12，默认 4）。卡上还有一张最近 7 天的表，一天一行：推算出来的区间（形如 `07:00 – 02:00`）、那天的条数、午夜之后还有几条、已经写了几篇。看到某天「后半夜有条目 + 有页面」，就知道第二天那一投会先补夜尾巴。参数改完点保存立刻生效，「重算」只是重新拉一次 `/daycut`。
+
+删除的入口都在「记忆」页右栏：每条事实、每条片段、每一篇日记右边都有「删除」。搜索页的结果也能直接删。这些都不需要开会话的「删」开关，只有模型侧「清空某个会话的全部片段」受它约束——那是唯一影响一片历史的动作。**每一次删除都先问一遍**，问的句式是同一句「真的要从本鲸脑海里删掉{这条事实 / 这条片段 / 这篇日记 / 这个会话的全部片段}吗ε＝ε＝ε＝(#>д<)ﾉ」——删了就找不回来，所以文案没写成客气的「确定吗」。
 
 ## 配色与主题
 
 面板和输入框角落的小开关都只引用 `--dsw-alias-*` token，不写死任何颜色，所以亮色和暗色都跟着走，不需要媒体查询。
 
-**五种盒子只有一处颜色定义**：五个页签里的模块原来是各取各的别名——卡片和统计格用 `settings-card-fill`、记忆页的面板和模型行用 `bg-layer-1`、预设卡片用 `bg-layer-2`——于是同一个面板里出现三种灰。现在 `.dm-page` 上声明一层薄薄的接口，所有盒子只读这四个名字：
+**五种盒子只有一处颜色定义**：六个页签里的模块原来是各取各的别名——卡片和统计格用 `settings-card-fill`、记忆页的面板和模型行用 `bg-layer-1`、预设卡片用 `bg-layer-2`——于是同一个面板里出现三种灰。现在 `.dm-page` 上声明一层薄薄的接口，所有盒子只读这四个名字：
 
 | 变量 | 值 | 谁用 |
 | --- | --- | --- |
@@ -224,7 +271,8 @@
 
 - 任务的唯一身份是标题 `深度记忆 · 写日记`；`ensureTask` 按标题查目录，已存在且时间相同就直接返回，时间不同则 `edit` 改期，不会造出第二个任务
 - `target` 的 `agentPreset` 是 `deepmemory-diary`（见上一节），没传就由插件补上，所以日记会话天然是「人设 + 时钟 + 文件读写」那一套
-- 提示词里**不写日期**：每次投递都是同一段话，日期由模型按投递时刻自己算（04:00 之前算昨天，之后算今天）。早期版本把当天日期烤进 prompt，一次写死之后就永远是那一天，日记也就再也写不出来了；`ensureTask` 现在会检查 prompt 里有没有 `PROMPT_MARK`，没有就就地修好。这条标记跟着指令的含义走——指令改了意思，标记就要改，好让旧任务在下次激活时被重写
+- 提示词里**不写日期**：每次投递都是同一段话，日期由模型按投递时刻自己算（按设置里的日界：最晚小时之前算昨天，之后算今天）。早期版本把当天日期烤进 prompt，一次写死之后就永远是那一天，日记也就再也写不出来了；`ensureTask` 现在会检查 prompt 里有没有 `PROMPT_MARK`，没有就就地修好。这条标记跟着指令的含义走——指令改了意思，标记就要改，好让旧任务在下次激活时被重写
+- 提示词是**两阶段**的：第一步补前一天缺的夜尾巴（见上一节），第二步写今天
 - 当天没素材时不写：prompt 里明确要求回「今天没有素材，不写日记」且不调 `diary_write`
 - 插件自身不发任何模型调用，也不轮询——一切由 DSH 的定时系统驱动
 
@@ -251,6 +299,7 @@ GET  /api/deepmemory/facts?limit=200
 GET  /api/deepmemory/episodes?limit=100&day=YYYY-MM-DD
 GET  /api/deepmemory/diary?limit=30[&day=YYYY-MM-DD][&offset=…]
 GET  /api/deepmemory/search?q=…&kinds=fact,episode,diary&from=…&to=…&sessionId=…
+                                     # 每条 hit 带 marks: [{ text, tier }]，tier 是 exact 或 fuzzy
 GET  /api/deepmemory/settings
 GET  /api/deepmemory/sessions
 GET  /api/deepmemory/session-flags?sessionId=…
@@ -258,7 +307,8 @@ GET  /api/deepmemory/dependency
 GET  /api/deepmemory/models
 GET  /api/deepmemory/model-catalog
 GET  /api/deepmemory/diary-task
-POST /api/deepmemory/settings       { scope: preset|preset-subagent|session|subagent|semantic|diary|clear-session, id, flags, diary }
+GET  /api/deepmemory/daycut?days=7
+POST /api/deepmemory/settings       { scope: preset|preset-subagent|session|subagent|semantic|diary|dayclock|clear-session, id, flags, diary, dayclock }
 POST /api/deepmemory/session-flags  { sessionId, scope?: 'subagent', flags | clear: true }
 POST /api/deepmemory/forget         { kind: fact|episode|diary|session, id | day | sessionId }
 POST /api/deepmemory/facts          { text, subject, weight }
@@ -272,13 +322,15 @@ GET  /api/deepmemory/missed
 
 `/calendar` 与 `/day` 都收一个可选的 `sessionId`，收到就整个页面窄到那一个会话：日记不出现（一篇日记属于「哪一天」，不属于「哪一句话」），事实与片段按 `source_session` / `session_id` 过滤，缺口标记也不再算——补写是全局的事，不在会话页里提供。会话窗口里的「深度记忆」页签就是同一个 `/day` + `/calendar`，只是固定带上 `sessionId`。
 
-`/settings` 的 `scope` 说明：`preset` / `preset-subagent` 写某个预设的默认值（`id` 是预设 id），`session` / `subagent` 写某个会话自己那一层（`id` 是会话 id，预设由插件按会话查出来，不用前端传），`diary` 写写日记的人格与模型（`{ persona, provider, model }`，落盘后立刻重挂预设），`semantic` / `clear-session` 各自一个开关。**`global` 和 `backfill` 都不存在了**：进程级的「全局默认」被预设层取代，「写日记时顺带补一周」那个开关随自动补写一起删掉了——补写现在只有人在面板里点。
+`/settings` 的 `scope` 说明：`preset` / `preset-subagent` 写某个预设的默认值（`id` 是预设 id），`session` / `subagent` 写某个会话自己那一层（`id` 是会话 id，预设由插件按会话查出来，不用前端传），`diary` 写写日记的人格与模型（`{ persona, provider, model }`，落盘后立刻重挂预设），`dayclock` 写日界那三个参数（`{ enabled, gapMinutes, latestHour }`），`semantic` / `clear-session` 各自一个开关。**`global` 和 `backfill` 都不存在了**：进程级的「全局默认」被预设层取代，「写日记时顺带补一周」那个开关随自动补写一起删掉了——补写现在只有人在面板里点。
+
+`/daycut?days=N` 是设置页「一天到哪里结束」那张卡的数据：`days` 夹在 1..60（默认 7），返回 `{ config, today, days: [{ day, from, to, cutHour, nextCutHour, count, tailCount, pages }] }`。`from` / `to` / `cutHour` / `nextCutHour` 是推算出来的窗口边界，`tailCount` 是午夜之后、日界之前的条数，`pages` 是那天已经有几篇日记——「后半夜有条目且有页面」就是补夜尾巴的信号。
 
 `/activity?days=371` 供概览那面贡献墙用（`days` 夹在 1..400）；它不做「一天一次」的三连查，而是走 `MemoryBoard` 之外的 `store.activityBetween(fromDay, toDay)`，一次拿三个分组计数。每个格子还带一个 `missing`：当天有片段或事实、却没有日记。
 
 `/backfill` 是「记忆」页那两个按钮：`{ day }` 是补写（那天没有日记），`{ day, mode: 'rewrite' }` 是重写（那天已有日记，再写一篇新的，旧的留着）。两者都新建一次性投递、都不跑定时任务，`202` 加 `mode: 'once'`、`rewrite` 和 `taskId`；`400` 是 `day` 不成 `YYYY-MM-DD`，`409` 是宿主拒绝投递，`503` 是没有 `schedule` 服务。
 
-`/missed` 是那条错过的提醒：读定时任务最后一次投递的 `scheduledAt` 与 `deliveredAt`，两边各自按 04:00 日界折算成「目标日」，不相等就说明前一个目标日那一次被跳过了；那天的日记已经存在、或者这次错过已经超过 30 天，就什么都不返回。返回一条就够面板显示一行字加一个补写按钮，不需要任何「已读」状态。
+`/missed` 是那条错过的提醒：读定时任务最后一次投递的 `scheduledAt` 与 `deliveredAt`，两边各自按设置里的**最晚小时**（默认 4 点）折算成「目标日」，不相等就说明前一个目标日那一次被跳过了；那天的日记已经存在、或者这次错过已经超过 30 天，就什么都不返回。这里刻意用固定的 `latestHour` 而不是逐夜推算的窗口——它比的是两个历史时刻，不能因为今天参数不同就换结论。返回一条就够面板显示一行字加一个补写按钮，不需要任何「已读」状态。
 
 `GET /dependency` 的响应里带一个 `progress`：`{ phase: 'idle'|'installing'|'done'|'error', bytes, totalBytes, startedAt, finishedAt, error }`。npm 不报字节，所以 Host 在装的时候每秒量一次 `vendor/` 的大小当作进度，`totalBytes` 是估算的 600 MB（实测一次完整安装约 575 MB——onnxruntime-node 把每个平台的 native 运行时都装了）。面板每 900 ms 拉一次这个接口，把「安装中…」变成「12.4 MB / 320.0 MB（4%）」。这是一个进度提示，不是倒计时；装完显示的是实测落盘大小。
 
@@ -290,11 +342,17 @@ GET  /api/deepmemory/missed
 
 「什么时候查、什么时候记」由插件自己写（`lib/index.js` 的 `guidanceText()`），注册在 `systemPrompt.section` 上，不塞进任何 preset 的 persona——换 preset 不该换掉记忆的用法。
 
+这段话**按开关生成**：每条都以「调用某个工具」结尾，而工具本身也会被开关从工具表里摘掉（见上一节的 `GATED_TOOLS`）。两处若不同步，模型就会去调一个它看不见的工具——更糟的是被摘掉的工具哪怕被调用也只会回一句「没查」，模型于是以为自己查过了。所以「读」关掉时 `memory_search` / `memory_recall` / `diary_read` 三条一起消失，「写」关掉时 `memory_save` 三条消失，「删」关掉时 `memory_forget` 消失；**四个开关全关时整段返回空串**，空 section 在渲染前被丢掉，那段「记忆内容当作数据」的警示也一起走掉。传空参 `guidanceText()` 仍渲染全文，给文档和面板预览用。
+
 那段「该查就去查」的督促单独占一个 section（`deepmemory:recall-nudge`），并且**只在「读」开着的会话里存在**：它的 `text` 是个函数，拿得到本次装配的 `agent`，读开关关着就返回空串；空 section 在渲染前会被丢掉，所以关掉时那段话根本不进提示词，不是进了不生效。装配发生在每一轮开始时，改开关下一轮就换。
+
+开关改完还要**立刻**重建工具表：`/session-flags` 与 `/settings` 两条路由在落盘之后都会调 `resyncGating()`。它先用 `ctx.get('agents')` 的 `list()` 把当前活着的 agent 全部补进登记表（插件挂载前就存在的会话否则永远轮不到），再逐个重新算一遍该藏哪些名字；单个 agent 出错只记一条警告，不拖垮其余的。
 
 另外注册一个 `systemPrompt.context`（order 900），每步只说一句：
 
 > 长期记忆：N 条事实、M 条过往片段、K 篇日记。最近一篇日记是 YYYY-MM-DD。需要细节时用 memory_search 查。
+
+末句点名了 `memory_search`，所以它只在「读」开着的会话里出现；关掉时这一块只剩条数与日期。
 
 ### 第三档依赖不进 profile
 
@@ -335,11 +393,16 @@ node test/store.test.mjs
 node test/search.test.mjs
 node test/settings.test.mjs
 node test/diary.test.mjs
+node test/dayclock.test.mjs
 node test/toolkit.test.mjs
 node test/scheduler.test.mjs
+node test/guidance.test.mjs
+node test/session.test.mjs
 ```
 
-逐个文件跑：`node --test test/` 在本机沙箱里会因为 `spawn EPERM` 挂掉。
+逐个文件跑（加 `--test` 也行）：`node --test test/` 在本机沙箱里会因为 `spawn EPERM` 挂掉。设置页的渲染另有 `node test/smoke.cjs`（`SMOKE_TAB=settings`、`SMOKE_NEEDLES="a;;b"`）。`npm test` 按上面顺序跑一遍并带上冒烟。
+
+跟时钟有关的逻辑（`dayclock.js`、`dayWindow`、`nightTailOf`）测试必须**自己造时间戳**：`store.saveEpisode({ at })` 配合 `startOfDayMs(day) + hour * HOUR_MS`，不要拿 `Date.now()` 去断言具体钟点。
 
 ### 不能 import `@deepseek-ai/*`
 
@@ -379,8 +442,21 @@ ctx.inject(['connection'], (connCtx) => {
 
 ## 安装
 
+从本仓库装（推荐，`plugin_manager` 认 git 地址）：
+
 ```text
+plugin_manager action=install_bundle target=git+https://github.com/emo-bird/dsh-deepmemory
+```
+
+或者先在本地 clone，再指向目录：
+
+```text
+git clone https://github.com/emo-bird/dsh-deepmemory
 plugin_manager action=install_bundle target=<本目录绝对路径>
 ```
 
-替换已安装的包需要重启 DSH 才会加载新 JS。
+替换已安装的包需要重启 DSH 才会加载新 JS。开发时更省事的做法是把 profile 里那份装成 junction（`mklink /J <profile>/node_modules/@emo-bird/dsh-deepmemory <本目录>`），改完刷新页面即生效。
+
+## 许可证
+
+MIT。
