@@ -37,7 +37,8 @@
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "test": "node test/store.test.mjs && node test/search.test.mjs && node test/settings.test.mjs && node test/diary.test.mjs && node test/dayclock.test.mjs && node test/toolkit.test.mjs && node test/scheduler.test.mjs && node test/guidance.test.mjs && node test/session.test.mjs && node test/smoke.cjs",

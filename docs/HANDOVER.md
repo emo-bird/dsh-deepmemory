@@ -1,7 +1,8 @@
 # 交接文档 · dsh-deepmemory
 
 > 写给下一个在本机接手的 AI。目标：你读完这一份，就能继续干活，不用重新勘查。
-> 最后更新：2026-11-15（日界 + 夜尾巴）。仓库 HEAD 见 `git log -1`。
+> 面向用户的说明在 [README](../README.md)，偏实现叙述的在 [ARCHITECTURE](ARCHITECTURE.md)。
+> 最后更新：2026-11-17（半成品补齐 + 推送 GitHub）。仓库 HEAD 见 `git log -1`。
 
 ---
 
